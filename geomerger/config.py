@@ -9,9 +9,9 @@ class RedisConfig(BaseModel):
     port: conint(ge=1, le=65536) = 6379
     stream_id: str = 'stream1'
     input_stream_prefix: str = 'objecttracker'
-    output_stream_prefix: str = 'mystage'
+    output_stream_prefix: str = 'geomerger'
 
-class MyStageConfig(BaseSettings):
+class GeoMergerConfig(BaseSettings):
     log_level: LogLevel = LogLevel.WARNING
     redis: RedisConfig = RedisConfig()
     prometheus_port: conint(gt=1024, le=65536) = 8000

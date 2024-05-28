@@ -1,3 +1,3 @@
 #!/bin/bash
 
-docker push starwitorg/sae-my-stage:$(poetry version --short)
+docker push starwitorg/sae-geo-merger:$(poetry version --short)
