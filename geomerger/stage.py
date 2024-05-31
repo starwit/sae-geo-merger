@@ -1,6 +1,8 @@
 import logging
 import signal
 import threading
+import time
+from typing import List, Tuple
 
 from prometheus_client import Counter, Histogram, start_http_server
 from visionlib.pipeline.consumer import RedisConsumer
@@ -42,26 +44,22 @@ def run_stage():
     geo_merger = GeoMerger(CONFIG)
 
     consume = RedisConsumer(CONFIG.redis.host, CONFIG.redis.port, 
-                            stream_keys=[f'{CONFIG.redis.input_stream_prefix}:{CONFIG.redis.stream_id}'])
+                            stream_keys=[f'{CONFIG.redis.input_stream_prefix}:{CONFIG.redis.stream_id}'], block=None)
     publish = RedisPublisher(CONFIG.redis.host, CONFIG.redis.port)
     
     with consume, publish:
-        for stream_key, proto_data in consume():
+        for _, proto_data in consume():
             if stop_event.is_set():
                 break
 
-            if stream_key is None:
-                continue
+            if proto_data is None:
+                time.sleep(0.01)
 
-            stream_id = stream_key.split(':')[1]
+            if proto_data is not None:
+                FRAME_COUNTER.inc()
 
-            FRAME_COUNTER.inc()
+            output_records: List[Tuple[str, bytes]] = geo_merger.get(proto_data)
 
-            output_proto_data = geo_merger.get(proto_data)
-
-            if output_proto_data is None:
-                continue
-            
-            with REDIS_PUBLISH_DURATION.time():
-                publish(f'{CONFIG.redis.output_stream_prefix}:{stream_id}', output_proto_data)
-            
+            for stream_id, output_proto_data in output_records:
+                with REDIS_PUBLISH_DURATION.time():
+                    publish(f'{CONFIG.redis.output_stream_prefix}:{stream_id}', output_proto_data)
