@@ -30,7 +30,7 @@ class GeoMerger:
         self._estimated_stream_head = 0
         self._last_update = 0
         self._primary_by_virtual_ids: Dict[str, List[str]] = defaultdict(list)
-        self._virtual_by_primary_id: Dict[str, str] = dict()
+        self._virtual_by_primary_id: Dict[str, str] = defaultdict(lambda: None)
 
     def __call__(self, input_proto) -> Any:
         return self.get(input_proto)
@@ -64,6 +64,9 @@ class GeoMerger:
                         self._primary_by_virtual_ids[virtual_id].append(closest_det.object_id)
                         self._virtual_by_primary_id[closest_det.object_id] = virtual_id
                 # Do nothing if the mapping already exists (we replace ids later)
+            self._buffers_by_stream[input_msg.frame.source_id].append(input_msg)
+
+        # TODO We need to remove detections from all buffers that have an active mapping (all but the first one)
 
         # Apply active mappings to all outgoing messages
         out_buffer = self._apply_mappings(out_buffer)
@@ -73,7 +76,7 @@ class GeoMerger:
     def _remove_expired_messages(self) -> List[SaeMessage]:
         expired = []
         for buffer in self._buffers_by_stream.values():
-            while len(buffer) > 0 and (buffer[0].frame.timestamp_utc_ms < (self._estimated_stream_head - self._config.merging_config.max_time_drift_s)):
+            while len(buffer) > 0 and (buffer[0].frame.timestamp_utc_ms < (self._estimated_stream_head - self._config.merging_config.max_time_drift_s) * 1000):
                 expired.append(buffer.popleft())
         return expired
     
