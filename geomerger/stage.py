@@ -44,7 +44,7 @@ def run_stage():
     geo_merger = GeoMerger(CONFIG)
 
     consume = RedisConsumer(CONFIG.redis.host, CONFIG.redis.port, 
-                            stream_keys=[f'{CONFIG.redis.input_stream_prefix}:{CONFIG.redis.stream_id}'], block=None)
+                            stream_keys=[f'{CONFIG.redis.input_stream_prefix}:{stream_id}' for stream_id in CONFIG.merging_config.input_stream_ids], block=None)
     publish = RedisPublisher(CONFIG.redis.host, CONFIG.redis.port)
     
     with consume, publish:
