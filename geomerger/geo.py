@@ -35,4 +35,4 @@ def distance_m(coord1: Coord, coord2: Coord) -> float:
     """
     abs_lat_delta = abs(coord1.lat - coord2.lat) * m_per_deg_lat(coord1.lat)
     abs_lon_delta = abs(coord1.lon - coord2.lon) * m_per_deg_lon(coord1.lat)
-    return math.sqrt(pow(abs_lat_delta, 2) + pow(abs_lon_delta, 2))
+    return math.sqrt(abs_lat_delta ** 2 + abs_lon_delta ** 2)
