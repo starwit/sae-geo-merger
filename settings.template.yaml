@@ -7,7 +7,7 @@ redis:
   output_stream_prefix: geomerger
 merging_config:
   max_distance_m: 2
-  max_time_drift_s: 0.5
+  merging_window_ms: 0.5
   input_stream_ids: 
     - stream1
     - stream2

@@ -9,9 +9,9 @@ from prometheus_client import Counter, Histogram, Summary
 from visionapi.messages_pb2 import (BoundingBox, Detection, GeoCoordinate,
                                     SaeMessage)
 
-from .config import GeoMergerConfig
-from .mapper import Mapper
+from .config import GeoMergerConfig, LogLevel, MergingConfig
 from .geo import Coord, distance_m
+from .mapper import Mapper
 
 logging.basicConfig(format='%(asctime)s %(name)-15s %(levelname)-8s %(processName)-10s %(message)s')
 logger = logging.getLogger(__name__)
@@ -23,11 +23,11 @@ PROTO_SERIALIZATION_DURATION = Summary('geo_merger_proto_serialization_duration'
 PROTO_DESERIALIZATION_DURATION = Summary('geo_merger_proto_deserialization_duration', 'The time it takes to deserialize an input proto')
 
 class GeoMerger:
-    def __init__(self, config: GeoMergerConfig) -> None:
+    def __init__(self, config: MergingConfig, log_level: LogLevel) -> None:
+        logger.setLevel(log_level.value)
         self._config = config
-        logger.setLevel(self._config.log_level.value)
 
-        self._buffers_by_stream: Dict[str, Deque[SaeMessage]] = defaultdict(lambda: deque(maxlen=100))
+        self._buffer: Deque[SaeMessage] = deque(maxlen=100)
         self._estimated_stream_head = 0
         self._last_update = 0
         self._mapper = Mapper()
@@ -51,58 +51,54 @@ class GeoMerger:
 
         if input_msg is not None:
             for input_det in input_msg.detections:
-                # Check all stream buffers for the closest matching detection
                 closest_det = self._find_closest_detection(input_msg, input_det)
                 
-                # Here, we have found (albeit in a terribly inefficient way) the closest detection in our buffers meeting all similarity requirements
                 if closest_det is not None:
-                    if self._mapper.is_primary(closest_det.object_id):
+                    if self._mapper.is_primary(closest_det.object_id) and self._mapper.get_primary(input_det.object_id) is None:
                         self._mapper.map_secondary(input_det.object_id, closest_det.object_id)
                         logger.info(f'Mapped {input_det.object_id.hex()[:4]} to {closest_det.object_id.hex()[:4]}')
                     elif self._mapper.is_secondary(closest_det.object_id):
                         primary = self._mapper.get_primary(closest_det.object_id)
-                        self._mapper.map_secondary(input_det.object_id, primary)
-                        logger.info(f'Mapped {input_det.object_id.hex()[:4]} to {primary.hex()[:4]}')
+                        if not primary == input_det.object_id:
+                            self._mapper.map_secondary(input_det.object_id, primary)
+                            logger.info(f'Mapped {input_det.object_id.hex()[:4]} to {primary.hex()[:4]}')
                 else:
-                    self._mapper.add_primary(input_det.object_id)
-                    logger.info(f'Added primary {input_det.object_id.hex()[:4]}')
+                    if not self._mapper.is_known(input_det.object_id):
+                        self._mapper.add_primary(input_det.object_id)
+                        logger.info(f'Added primary {input_det.object_id.hex()[:4]}')
             
-            self._buffers_by_stream[input_msg.frame.source_id].append(input_msg)
+            self._buffer.append(input_msg)
 
         out_buffer = self._retrieve_expired_messages()
-
-        # TODO Wait until all buffers have one entry or max_time_drift has expired, then merge all buffered messages (one from each buffer)
-
-        # Remove all duplicate detections (according to matched ids)
-        out_buffer = self._remove_duplicate_detections(out_buffer)
 
         # Apply active mappings to all outgoing messages
         out_buffer = self._apply_mappings(out_buffer)
 
-        return [(self._config.merging_config.output_stream_id, self._pack_proto(out_msg)) for out_msg in out_buffer]
+        # Remove all duplicate detections but the first
+        out_buffer = self._remove_duplicate_detections(out_buffer)
+
+        return [(self._config.output_stream_id, self._pack_proto(out_msg)) for out_msg in out_buffer]
     
     def _retrieve_expired_messages(self) -> List[SaeMessage]:
         expired = []
-        for buffer in self._buffers_by_stream.values():
-            while len(buffer) > 0 and (buffer[0].frame.timestamp_utc_ms < self._estimated_stream_head - self._config.merging_config.max_time_drift_s * 1000):
-                expired.append(buffer.popleft())
+        while len(self._buffer) > 0 and (self._buffer[0].frame.timestamp_utc_ms < self._estimated_stream_head - self._config.merging_window_ms):
+            expired.append(self._buffer.popleft())
         return expired
     
     def _find_closest_detection(self, input_msg: SaeMessage, input_det: Detection) -> Optional[Detection]:
         closest_det: Detection = None
         closest_distance: float = 999999
-        for stream_id, buffer in self._buffers_by_stream.items():
-            if stream_id == input_msg.frame.source_id:
+        for msg in self._buffer:
+            if msg.frame.source_id == input_msg.frame.source_id:
                 continue
-            for msg in buffer:
-                for det in msg.detections:
-                    s_dist = self._get_spatial_distance(input_det, det)
-                    t_dist = self._get_scaled_temporal_distance(input_msg.frame.timestamp_utc_ms, msg.frame.timestamp_utc_ms)
-                    dist = math.sqrt(s_dist ** 2 + t_dist ** 2)
-                    if self._is_similar(input_det, det) and s_dist < self._config.merging_config.max_distance_m:
-                        if closest_distance > dist:
-                            closest_distance = dist
-                            closest_det = det
+            t_dist = abs(input_msg.frame.timestamp_utc_ms - msg.frame.timestamp_utc_ms)
+            for det in msg.detections:
+                s_dist = self._get_spatial_distance(input_det, det)
+                dist = s_dist * t_dist
+                if self._is_similar(input_det, det) and s_dist < self._config.max_distance_m:
+                    if closest_distance > dist:
+                        closest_distance = dist
+                        closest_det = det
         return closest_det
     
     def _is_similar(self, det1: Detection, det2: Detection):
@@ -115,16 +111,6 @@ class GeoMerger:
             Coord(det1.geo_coordinate.latitude, det1.geo_coordinate.longitude), 
             Coord(det2.geo_coordinate.latitude, det2.geo_coordinate.longitude)
         )
-    
-    def _get_scaled_temporal_distance(self, t1: float, t2: float) -> float:
-        return (abs(t1 - t2) * 1000) * 2 * self._config.merging_config.max_time_drift_s
-
-    def _remove_duplicate_detections(self, messages: List[SaeMessage]) -> List[SaeMessage]:
-        for msg in messages:
-            for idx, is_secondary in enumerate([self._mapper.is_secondary(det.object_id) for det in msg.detections]):
-                # TODO Only remove if the primary is present
-                if is_secondary:
-                    del msg.detections[idx]
 
     def _apply_mappings(self, messages: List[SaeMessage]) -> List[SaeMessage]:
         for msg in messages:
@@ -133,6 +119,19 @@ class GeoMerger:
                     primary = self._mapper.get_primary(det.object_id)
                     det.object_id = primary
         return messages
+    
+    def _remove_duplicate_detections(self, messages: List[SaeMessage]) -> List[SaeMessage]:
+        already_seen_ids: List[bytes] = []
+        for msg in messages:
+            idxs_to_remove: List[int] = []
+            for idx, det in enumerate(msg.detections):
+                if det.object_id in already_seen_ids:
+                    idxs_to_remove
+                else:
+                    already_seen_ids.append(det.object_id)
+            for idx in reversed(idxs_to_remove):
+                del msg.detections[idx]
+        return messages        
 
     @PROTO_DESERIALIZATION_DURATION.time()
     def _unpack_proto(self, sae_message_bytes):

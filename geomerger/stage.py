@@ -41,7 +41,7 @@ def run_stage():
 
     logger.info(f'Starting geo mapper stage. Config: {CONFIG.model_dump_json(indent=2)}')
 
-    geo_merger = GeoMerger(CONFIG)
+    geo_merger = GeoMerger(CONFIG.merging_config, CONFIG.log_level)
 
     consume = RedisConsumer(CONFIG.redis.host, CONFIG.redis.port, 
                             stream_keys=[f'{CONFIG.redis.input_stream_prefix}:{stream_id}' for stream_id in CONFIG.merging_config.input_stream_ids])
