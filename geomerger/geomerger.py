@@ -1,15 +1,13 @@
 import logging
-import math
 import time
 from collections import defaultdict, deque
-from typing import Any, Deque, Dict, List, NamedTuple, Optional, Tuple
 from statistics import fmean
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 from prometheus_client import Counter, Histogram, Summary
-from visionapi.messages_pb2 import (BoundingBox, Detection, GeoCoordinate,
-                                    SaeMessage)
+from visionapi.messages_pb2 import Detection, SaeMessage
 
-from .config import GeoMergerConfig, LogLevel, MergingConfig
+from .config import LogLevel, MergingConfig
 from .geo import Coord, distance_m
 from .mapper import Mapper
 
@@ -53,16 +51,39 @@ class GeoMerger:
         if input_msg is not None:
             for input_det in input_msg.detections:
                 closest_det = self._find_closest_detection(input_msg, input_det)
+                input_id = input_det.object_id
                 
                 if closest_det is not None:
-                    if self._mapper.is_primary(closest_det.object_id) and self._mapper.get_primary(input_det.object_id) is None:
-                        self._mapper.map_secondary(input_det.object_id, closest_det.object_id)
-                        logger.info(f'Mapped {input_det.object_id.hex()[:4]} to {closest_det.object_id.hex()[:4]}')
-                    elif self._mapper.is_secondary(closest_det.object_id):
-                        primary = self._mapper.get_primary(closest_det.object_id)
-                        if not primary == input_det.object_id:
-                            self._mapper.map_secondary(input_det.object_id, primary)
-                            logger.info(f'Mapped {input_det.object_id.hex()[:4]} to {primary.hex()[:4]}')
+                    closest_id = closest_det.object_id
+
+                    match (
+                        self._mapper.is_primary(closest_id),
+                        self._mapper.is_secondary(closest_id),
+                        self._mapper.is_primary(input_id),
+                        self._mapper.is_secondary(input_id),
+                    ):
+                        case (True, False, False, False):
+                            self._mapper.map_secondary(input_id, closest_id)
+                            logger.info(f'Mapped {input_id.hex()[:4]} to {closest_id.hex()[:4]}')
+                        case (False, True, False, False):
+                            primary = self._mapper.get_primary(closest_id)
+                            if not primary == input_id:
+                                self._mapper.map_secondary(input_id, primary)
+                                logger.info(f'Mapped {input_id.hex()[:4]} to {primary.hex()[:4]}')
+                        case (False, True, True, False):
+                            primary = self._mapper.get_primary(closest_id)
+                            if not primary == input_id:
+                                self._mapper.demote_primary(input_id, new_primary=primary)
+                                logger.info(f'Mapped {input_id.hex()[:4]} to {primary.hex()[:4]}')
+                        case (True, False, True, False):
+                            self._mapper.demote_primary(input_id, new_primary=closest_id)
+                            logger.info(f'Demoted {input_id.hex()[:4]} to secondary of {closest_id.hex()[:4]}')
+                        case (True, False, False, True):
+                            if not self._mapper.is_secondary_for(input_id, primary=closest_id):
+                                self._mapper.remap_secondary(input_id, closest_id)
+                                logger.info(f'Remapped {input_id} to {closest_id}')
+                        case c:
+                            logger.error(f'This should not happen. Please debug: {c}')
                 else:
                     if not self._mapper.is_known(input_det.object_id):
                         self._mapper.add_primary(input_det.object_id)
