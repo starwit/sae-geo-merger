@@ -15,6 +15,7 @@ class RedisConfig(BaseModel):
 class MergingConfig(BaseModel):
     max_distance_m: float
     merging_window_ms: float
+    target_mps: float
     input_stream_ids: Annotated[List[str], Field(min_length=1)]
     output_stream_id: str
 

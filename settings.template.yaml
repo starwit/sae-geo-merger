@@ -8,6 +8,7 @@ redis:
 merging_config:
   max_distance_m: 2
   merging_window_ms: 0.5
+  target_mps: 5
   input_stream_ids: 
     - stream1
     - stream2

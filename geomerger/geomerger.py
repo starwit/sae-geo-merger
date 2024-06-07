@@ -3,7 +3,7 @@ import math
 import time
 from collections import defaultdict, deque
 from typing import Any, Deque, Dict, List, NamedTuple, Optional, Tuple
-from uuid import uuid4
+from statistics import fmean
 
 from prometheus_client import Counter, Histogram, Summary
 from visionapi.messages_pb2 import (BoundingBox, Detection, GeoCoordinate,
@@ -30,6 +30,7 @@ class GeoMerger:
         self._buffer: Deque[SaeMessage] = deque(maxlen=100)
         self._estimated_stream_head = 0
         self._last_update = 0
+        self._last_emission = 0
         self._mapper = Mapper()
 
     def __call__(self, input_proto) -> Any:
@@ -69,15 +70,23 @@ class GeoMerger:
             
             self._buffer.append(input_msg)
 
-        out_buffer = self._retrieve_expired_messages()
+        if (time.time() - self._last_emission) > (1 / self._config.target_mps):
+            out_buffer = self._retrieve_expired_messages()
+            if len(out_buffer) == 0:
+                return []
 
-        # Apply active mappings to all outgoing messages
-        out_buffer = self._apply_mappings(out_buffer)
+            # Apply active mappings to all outgoing messages
+            out_buffer = self._apply_mappings(out_buffer)
 
-        # Remove all duplicate detections but the first
-        out_buffer = self._remove_duplicate_detections(out_buffer)
+            # Remove all duplicate detections but the first
+            out_msg = self._merge_messages(out_buffer)
 
-        return [(self._config.output_stream_id, self._pack_proto(out_msg)) for out_msg in out_buffer]
+            print(f'len buf: {len(self._buffer)}; len out: {len(out_buffer)}')
+
+            self._last_emission = time.time()
+            return [(self._config.output_stream_id, self._pack_proto(out_msg))]
+        
+        return []
     
     def _retrieve_expired_messages(self) -> List[SaeMessage]:
         expired = []
@@ -120,18 +129,47 @@ class GeoMerger:
                     det.object_id = primary
         return messages
     
-    def _remove_duplicate_detections(self, messages: List[SaeMessage]) -> List[SaeMessage]:
-        already_seen_ids: List[bytes] = []
+    def _aggregate_duplicate_detections(self, detections: List[Detection]) -> List[Detection]:
+        aggregated_dets = []
+
+        dets_by_id: Dict[bytes, List[Detection]] = defaultdict(list)
+        for det in detections:
+            dets_by_id[det.object_id].append(det)
+
+        for dets in dets_by_id.values():
+            if len(dets) == 0:
+                continue
+            agg_det = Detection()
+            agg_det.class_id = dets[0].class_id
+            agg_det.object_id = dets[0].object_id
+            agg_det.geo_coordinate.latitude = fmean([d.geo_coordinate.latitude for d in dets])
+            agg_det.geo_coordinate.longitude = fmean([d.geo_coordinate.longitude for d in dets])
+            agg_det.confidence = fmean([d.confidence for d in dets])
+            aggregated_dets.append(agg_det)
+
+        return aggregated_dets
+
+    def _merge_messages(self, messages: List[SaeMessage]) -> SaeMessage:
+        '''Merges all given messages into one (dropping the frames)'''
+        if len(messages) == 0:
+            return None
+        
+        
+        out_msg = SaeMessage()
+        out_msg.frame.shape.CopyFrom(messages[0].frame.shape)
+        detections = []
+        earliest_timestamp = time.time_ns() // 1_000_000
+
         for msg in messages:
-            idxs_to_remove: List[int] = []
-            for idx, det in enumerate(msg.detections):
-                if det.object_id in already_seen_ids:
-                    idxs_to_remove
-                else:
-                    already_seen_ids.append(det.object_id)
-            for idx in reversed(idxs_to_remove):
-                del msg.detections[idx]
-        return messages        
+            detections.extend(msg.detections)
+            if msg.frame.timestamp_utc_ms < earliest_timestamp:
+                earliest_timestamp = msg.frame.timestamp_utc_ms
+
+        detections = self._aggregate_duplicate_detections(detections)
+        out_msg.detections.extend(detections)
+        out_msg.frame.timestamp_utc_ms = earliest_timestamp
+        
+        return out_msg
 
     @PROTO_DESERIALIZATION_DURATION.time()
     def _unpack_proto(self, sae_message_bytes):
