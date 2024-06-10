@@ -63,7 +63,7 @@ class GeoMerger:
                         self._mapper.is_secondary(input_id),
                     ):
                         case (False, False, False, False) | (True, False, False, False):
-                            # Both ids are new or the new secondary is new
+                            # Both ids are new or the input is new
                             self._mapper.map_secondary(input_id, closest_id)
                             logger.info(f'Mapped {input_id.hex()[:4]} to {closest_id.hex()[:4]}')
                         case (False, True, False, False):
@@ -74,17 +74,17 @@ class GeoMerger:
                         case (False, True, True, False):
                             primary = self._mapper.get_primary(closest_id)
                             if not primary == input_id:
-                                self._mapper.demote_primary(input_id, new_primary=primary)
-                                logger.info(f'Mapped {input_id.hex()[:4]} to {primary.hex()[:4]}')
+                                self._mapper.demote_primary(input_id, new_primary=primary, migrate_children=True)
+                                logger.info(f'Demoted {input_id.hex()[:4]} to secondary of {primary.hex()[:4]}')
                         case (True, False, True, False):
-                            self._mapper.demote_primary(input_id, new_primary=closest_id)
+                            self._mapper.demote_primary(input_id, new_primary=closest_id, migrate_children=True)
                             logger.info(f'Demoted {input_id.hex()[:4]} to secondary of {closest_id.hex()[:4]}')
                         case (True, False, False, True):
                             if not self._mapper.is_secondary_for(input_id, primary=closest_id):
                                 self._mapper.remap_secondary(input_id, closest_id)
                                 logger.info(f'Remapped {input_id} to {closest_id}')
-                        case c:
-                            logger.error(f'This should not happen. Please debug: {c}')
+                        case state:
+                            logger.error(f'This should not happen! Please debug. State: {state}')
             
             self._buffer.append(input_msg)
             self._buffer.sort(key=lambda m: m.frame.timestamp_utc_ms)

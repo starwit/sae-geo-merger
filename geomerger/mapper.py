@@ -37,13 +37,27 @@ class Mapper:
                 other_primary = self.get_primary(secondary)
                 raise MapperError(f'Secondary {id_to_str(secondary)} already mapped to primary {id_to_str(other_primary)}')
         
-        self._secondaries_by_primary[primary].append(secondary)
-        self._primary_by_secondary[secondary] = primary
+        self._add_mapping(primary, secondary)
 
         print('sec_by_prim')
         print_dict(self._secondaries_by_primary)
         print('prim_by_sec')
         print_dict(self._primary_by_secondary)
+
+    def _add_mapping(self, primary: bytes, secondary: bytes) -> None:
+        self._secondaries_by_primary[primary].append(secondary)
+        self._primary_by_secondary[secondary] = primary
+
+    def _remove_primary(self, primary: bytes) -> None:
+        secondaries = self._secondaries_by_primary.pop(primary, None)
+        if secondaries is not None:
+            for sec in secondaries:
+                self._primary_by_secondary.pop(sec, None)
+
+    def _remove_secondary(self, secondary: bytes) -> None:
+        primary = self._primary_by_secondary.pop(secondary, None)
+        if primary is not None:
+            self._primary_by_secondary[secondary]
 
     def remap_secondary(self, secondary: bytes, new_primary: bytes) -> None:
         if not self.is_secondary(secondary):
@@ -58,14 +72,20 @@ class Mapper:
         self._secondaries_by_primary[new_primary].append(secondary)
         self._primary_by_secondary[secondary] = new_primary
 
-    def demote_primary(self, primary: bytes, new_primary: bytes) -> None:
+    def demote_primary(self, primary: bytes, new_primary: bytes, migrate_children: bool = False) -> None:
+        '''Demotes primary, by remapping it to new_primary as a secondary and migrates the children if needed.'''
         if not self.is_primary(primary) or not self.is_primary(new_primary):
             raise MapperError(f'Primary {id_to_str(primary)} or new primary {id_to_str(new_primary)} is not primary.')
 
-        for sec in self._secondaries_by_primary[primary]:
-            del self._primary_by_secondary[sec]
-        
-        del self._secondaries_by_primary[primary]
+        children = []
+        if migrate_children:
+            children.extend(self._secondaries_by_primary(primary))
+
+        self._remove_primary(primary)
+
+        self._add_mapping(new_primary, primary)
+        for child in children:
+            self._add_mapping(new_primary, child)
 
     def get_primary(self, secondary: bytes) -> bytes:
         if not self.is_secondary(secondary):
