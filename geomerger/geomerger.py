@@ -25,7 +25,7 @@ class GeoMerger:
         logger.setLevel(log_level.value)
         self._config = config
 
-        self._buffer: Deque[SaeMessage] = deque(maxlen=100)
+        self._buffer: List[SaeMessage] = []
         self._estimated_stream_head = 0
         self._last_update = 0
         self._last_emission = 0
@@ -62,7 +62,8 @@ class GeoMerger:
                         self._mapper.is_primary(input_id),
                         self._mapper.is_secondary(input_id),
                     ):
-                        case (True, False, False, False):
+                        case (False, False, False, False) | (True, False, False, False):
+                            # Both ids are new or the new secondary is new
                             self._mapper.map_secondary(input_id, closest_id)
                             logger.info(f'Mapped {input_id.hex()[:4]} to {closest_id.hex()[:4]}')
                         case (False, True, False, False):
@@ -84,12 +85,9 @@ class GeoMerger:
                                 logger.info(f'Remapped {input_id} to {closest_id}')
                         case c:
                             logger.error(f'This should not happen. Please debug: {c}')
-                else:
-                    if not self._mapper.is_known(input_det.object_id):
-                        self._mapper.add_primary(input_det.object_id)
-                        logger.info(f'Added primary {input_det.object_id.hex()[:4]}')
             
             self._buffer.append(input_msg)
+            self._buffer.sort(key=lambda m: m.frame.timestamp_utc_ms)
 
         if (time.time() - self._last_emission) > (1 / self._config.target_mps):
             out_buffer = self._retrieve_expired_messages()
@@ -112,7 +110,7 @@ class GeoMerger:
     def _retrieve_expired_messages(self) -> List[SaeMessage]:
         expired = []
         while len(self._buffer) > 0 and (self._buffer[0].frame.timestamp_utc_ms < self._estimated_stream_head - self._config.merging_window_ms):
-            expired.append(self._buffer.popleft())
+            expired.append(self._buffer.pop(0))
         return expired
     
     def _find_closest_detection(self, input_msg: SaeMessage, input_det: Detection) -> Optional[Detection]:

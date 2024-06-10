@@ -11,8 +11,8 @@ def print_dict(d: Dict):
         else:
             print(f'  {v.hex()[:4]}')
 
-def print_id(id: bytes) -> str:
-    bytes.hex()[:4]
+def id_to_str(id: bytes) -> str:
+    return bytes.hex(id)[:4]
 
 
 class MapperError(Exception):
@@ -29,16 +29,13 @@ class Mapper:
     def map_secondary(self, secondary: bytes, primary: bytes) -> None:
         '''Add a mapping from primary to secondary if it does not exist yet.'''
 
-        if not self.is_primary(primary):
-            raise MapperError(f'Primary {print_id(primary)} is not primary.')
-        
         if self.is_secondary(secondary):
             if self.is_secondary_for(secondary, primary):
                 # Is already correctly mapped.
                 return
             else:
                 other_primary = self.get_primary(secondary)
-                raise MapperError(f'Secondary {print_id(secondary)} already mapped to primary {print_id(other_primary)}')
+                raise MapperError(f'Secondary {id_to_str(secondary)} already mapped to primary {id_to_str(other_primary)}')
         
         self._secondaries_by_primary[primary].append(secondary)
         self._primary_by_secondary[secondary] = primary
@@ -50,7 +47,7 @@ class Mapper:
 
     def remap_secondary(self, secondary: bytes, new_primary: bytes) -> None:
         if not self.is_secondary(secondary):
-            raise MapperError(f'{print_id(secondary)} is not secondary.')
+            raise MapperError(f'{id_to_str(secondary)} is not secondary.')
 
         if self.is_secondary_for(secondary, new_primary):
             # Correct, do nothing
@@ -61,13 +58,9 @@ class Mapper:
         self._secondaries_by_primary[new_primary].append(secondary)
         self._primary_by_secondary[secondary] = new_primary
 
-    def add_primary(self, primary: bytes) -> None:
-        if primary not in self._secondaries_by_primary:
-            self._secondaries_by_primary[primary] = []
-
     def demote_primary(self, primary: bytes, new_primary: bytes) -> None:
         if not self.is_primary(primary) or not self.is_primary(new_primary):
-            raise MapperError(f'Primary {print_id(primary)} or new primary {print_id(new_primary)} is not primary.')
+            raise MapperError(f'Primary {id_to_str(primary)} or new primary {id_to_str(new_primary)} is not primary.')
 
         for sec in self._secondaries_by_primary[primary]:
             del self._primary_by_secondary[sec]
@@ -76,12 +69,12 @@ class Mapper:
 
     def get_primary(self, secondary: bytes) -> bytes:
         if not self.is_secondary(secondary):
-            raise MapperError(f'Secondary {print_id(secondary)} is not secondary.')
+            raise MapperError(f'Secondary {id_to_str(secondary)} is not secondary.')
         return self._primary_by_secondary[secondary]
     
     def get_secondaries(self, primary: bytes) -> List[bytes]:
         if not self.is_primary(primary):
-            raise MapperError(f'Primary {print_id(primary)} is not primary.')
+            raise MapperError(f'Primary {id_to_str(primary)} is not primary.')
         return self._secondaries_by_primary[primary]
 
     def is_primary(self, id: bytes) -> bool:
