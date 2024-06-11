@@ -1,5 +1,4 @@
-import time
-from typing import List, NamedTuple, Optional, Iterator
+from typing import List
 
 from visionapi.messages_pb2 import SaeMessage
 

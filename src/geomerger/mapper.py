@@ -74,12 +74,12 @@ class Mapper:
 
     def demote_primary(self, primary: bytes, new_primary: bytes, migrate_children: bool = False) -> None:
         '''Demotes primary, by remapping it to new_primary as a secondary and migrates the children if needed.'''
-        if not self.is_primary(primary) or not self.is_primary(new_primary):
+        if not self.is_primary(primary) or self.is_secondary(new_primary):
             raise MapperError(f'Primary {id_to_str(primary)} or new primary {id_to_str(new_primary)} is not primary.')
 
         children = []
         if migrate_children:
-            children.extend(self._secondaries_by_primary(primary))
+            children.extend(self._secondaries_by_primary [primary])
 
         self._remove_primary(primary)
 
