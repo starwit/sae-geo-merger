@@ -532,6 +532,16 @@ files = [
 ]
 
 [[package]]
+name = "ratelimit"
+version = "2.2.1"
+description = "API rate limit decorator"
+optional = false
+python-versions = "*"
+files = [
+    {file = "ratelimit-2.2.1.tar.gz", hash = "sha256:af8a9b64b821529aca09ebaf6d8d279100d766f19e90b5059ac6a718ca6dee42"},
+]
+
+[[package]]
 name = "redis"
 version = "5.0.4"
 description = "Python client for Redis database and key-value store"
@@ -618,4 +628,4 @@ subdirectory = "python"
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.10"
-content-hash = "08cd33cd7f91d594443983c285920777092e4d3a9841b8254d731d879ed58876"
+content-hash = "ac88fe65e1e6e80e4952d72b044d3d59ab48a300cb77e2fe4eb198727b0546eb"

@@ -14,6 +14,7 @@ visionlib = { git = "https://github.com/starwit/vision-lib.git", subdirectory = 
 redis = "^5.0.0"
 pydantic-settings = "^2.0.3"
 prometheus-client = "^0.17.1"
+ratelimit = "^2.2.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.2"

@@ -10,7 +10,7 @@ from visionapi.messages_pb2 import Detection, SaeMessage
 from .buffer import MessageBuffer
 from .config import LogLevel, MergingConfig
 from .geo import Coord, distance_m
-from .mapper import Mapper
+from .mapper import Mapper, ExpiringMapper
 
 logging.basicConfig(format='%(asctime)s %(name)-15s %(levelname)-8s %(processName)-10s %(message)s')
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ class GeoMerger:
 
         self._buffer = MessageBuffer(target_window_size_ms=config.merging_window_ms)
         self._last_emission = 0
-        self._mapper = Mapper()
+        self._mapper = ExpiringMapper()
 
     def __call__(self, input_proto) -> Any:
         return self.get(input_proto)

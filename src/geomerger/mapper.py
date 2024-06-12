@@ -1,6 +1,9 @@
-from collections import defaultdict, deque
-from typing import Any, Deque, Dict, List, NamedTuple, Optional, Tuple
-import uuid
+import time
+from collections import defaultdict
+from typing import Any, Dict, List
+from ratelimit import limits
+import inspect
+
 
 def print_dict(d: Dict):
     for k, v in d.items():
@@ -20,7 +23,10 @@ class MapperError(Exception):
 
 
 class Mapper:
-    '''All mutating operations are idempotent'''
+    '''
+    This is essentially a collection of small trees with a deliberately limited set of operations available.
+    All mutating operations are idempotent.
+    '''
     
     def __init__(self) -> None:
         self._secondaries_by_primary: Dict[bytes, List[bytes]] = defaultdict(list)
@@ -108,3 +114,33 @@ class Mapper:
 
     def is_known(self, id: bytes) -> bool:
         return self.is_primary(id) or self.is_secondary(id)
+    
+
+class ExpiringMapper(Mapper):
+    def __init__(self, id_expiration_age_s: int = 120) -> None:
+        super().__init__()
+
+        self._id_expiration_age_s = id_expiration_age_s
+        self._ids_last_seen: Dict[bytes, float] = {}
+        self._expire_ids_limited = limits(calls=10, period=self._id_expiration_age_s, raise_on_limit=False)(self._expire_ids)
+        
+        # Wrap all methods part of the public API to transparently track and expire ids
+        for name, method in inspect.getmembers(self, predicate=inspect.ismethod):
+            if not name.startswith('_'):
+                setattr(self, name, self._wrap_method(method))
+ 
+    def _wrap_method(self, method):
+        def wrapper(*args, **kwargs):
+            for arg in [*args, *kwargs.values()]:
+                if isinstance(arg, bytes):
+                    self._ids_last_seen[arg] = time.time()
+            self._expire_ids_limited()
+            return method(*args, **kwargs)
+        return wrapper
+    
+    def _expire_ids(self):
+        expired_ids = [id for id, last_seen in self._ids_last_seen.items() if time.time() - last_seen > self._id_expiration_age_s]
+        for id in expired_ids:
+            self._remove_primary(id)
+            self._remove_secondary(id)
+            self._ids_last_seen.pop(id, None)

@@ -1,6 +1,7 @@
+import time
 import pytest
 
-from geomerger.mapper import Mapper, MapperError
+from geomerger.mapper import Mapper, MapperError,  ExpiringMapper
 
 
 def test_map_secondary():
@@ -74,3 +75,17 @@ def test_demote_primary_migrate():
 
     assert testee.is_secondary_for(b'pri1', b'pri0')
     assert testee.get_secondaries(b'pri0') == [b'pri1', b'sec1', b'sec2']
+
+def test_expiration():
+    testee = ExpiringMapper(id_expiration_age_s=0.2)
+    testee.map_secondary(b'sec1', b'pri1')
+    testee.map_secondary(b'sec2', b'pri1')
+
+    assert testee.is_known(b'pri1') == True
+
+    time.sleep(0.5)
+    
+    testee.map_secondary(b'sec3', b'pri2')
+
+    assert testee.is_known(b'pri1') == False
+    assert testee.is_known(b'pri2') == True
