@@ -33,6 +33,7 @@ def test_data() -> Iterable[SaeMessage]:
             proto_bytes_list.append(proto_bytes)
     return proto_bytes_list
 
+# TODO This test does not make a lot of sense without a useful metric establishing "success" and "failure"...
 def test_geomerger(testee, test_data):
     output = []
     for proto_bytes in test_data:
