@@ -28,7 +28,7 @@ class GeoMerger:
 
         self._buffer = MessageBuffer(target_window_size_ms=config.merging_window_ms)
         self._last_emission = 0
-        self._mapper = ExpiringMapper()
+        self._mapper = ExpiringMapper(id_expiration_age_s=config.expire_ids_after_s)
 
     def __call__(self, input_proto) -> Any:
         return self.get(input_proto)
@@ -51,6 +51,7 @@ class GeoMerger:
                     if closest_det is not None:
                         closest_id = closest_det.object_id
 
+                        # TODO This is (probably) a major bug: We do not check returned ids from the mapper if they belong to the same source (b/c we currently can't)
                         match (
                             self._mapper.is_primary(closest_id),
                             self._mapper.is_secondary(closest_id),
@@ -77,9 +78,9 @@ class GeoMerger:
                             case (True, False, False, True):
                                 if not self._mapper.is_secondary_for(buffer_id, primary=closest_id):
                                     self._mapper.remap_secondary(buffer_id, closest_id)
-                                    logger.info(f'Remapped {buffer_id} to {closest_id}')
+                                    logger.info(f'Remapped {buffer_id.hex()[:4]} to {closest_id.hex()[:4]}')
                             case state:
-                                logger.error(f'This should not happen! Please debug. State: {state}')
+                                logger.error(f'This should not happen! Please debug. State: {state}; buffer_id: {buffer_det.object_id.hex()[:4]}; matched_id: {closest_id.hex()[:4]}')
 
         out_buffer = self._buffer.pop_slice(min_slice_length_ms=(1 / self._config.target_mps))
         if len(out_buffer) == 0:
@@ -91,7 +92,7 @@ class GeoMerger:
         # Remove all duplicate detections but the first
         out_msg = self._merge_messages(out_buffer)
 
-        print(f'len buf: {len(self._buffer)}; len out: {len(out_buffer)}; since last: {round(time.time() - self._last_emission, 3)}')
+        # logger.debug(f'len buf: {len(self._buffer)}; len out: {len(out_buffer)}; since last: {round(time.time() - self._last_emission, 3)}')
 
         self._last_emission = time.time()
         return [(self._config.output_stream_id, self._pack_proto(out_msg))]
@@ -100,10 +101,16 @@ class GeoMerger:
         closest_det: Detection = None
         closest_distance: float = 999999
         for msg in self._buffer:
+            # Do not match detections of the same source / camera
+            # TODO Prevent that from happening in the first place (-> performance)
             if msg.frame.source_id == input_msg.frame.source_id:
                 continue
             t_dist = abs(input_msg.frame.timestamp_utc_ms - msg.frame.timestamp_utc_ms)
             for det in msg.detections:
+                # Do not match detections of different classes
+                # TODO Treat some classes as equal (e.g. trucks and cars)
+                if det.class_id != input_det.class_id:
+                    continue
                 s_dist = self._get_spatial_distance(input_det, det)
                 dist = s_dist * t_dist
                 if self._is_similar(input_det, det) and s_dist < self._config.max_distance_m:

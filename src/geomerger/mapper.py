@@ -1,18 +1,24 @@
+import inspect
+import logging
 import time
 from collections import defaultdict
 from typing import Any, Dict, List
+
 from ratelimit import limits
-import inspect
+
+logger = logging.getLogger(__name__)
 
 
-def print_dict(d: Dict):
+def dict_to_text(d: Dict):
+    text = ''
     for k, v in d.items():
-        print(f'{k.hex()[:4]}:')
+        text += f'\n{k.hex()[:4]}:'
         if isinstance(v, list):
             for e in v:
-                print(f'  {e.hex()[:4]}')
+                text += f'\n  {e.hex()[:4]}'
         else:
-            print(f'  {v.hex()[:4]}')
+            text += f'\n  {v.hex()[:4]}'
+    return text
 
 def id_to_str(id: bytes) -> str:
     return bytes.hex(id)[:4]
@@ -45,10 +51,7 @@ class Mapper:
         
         self._add_mapping(primary, secondary)
 
-        print('sec_by_prim')
-        print_dict(self._secondaries_by_primary)
-        print('prim_by_sec')
-        print_dict(self._primary_by_secondary)
+        self._log_mappings()
 
     def _add_mapping(self, primary: bytes, secondary: bytes) -> None:
         self._secondaries_by_primary[primary].append(secondary)
@@ -78,6 +81,8 @@ class Mapper:
         self._secondaries_by_primary[new_primary].append(secondary)
         self._primary_by_secondary[secondary] = new_primary
 
+        self._log_mappings()
+
     def demote_primary(self, primary: bytes, new_primary: bytes, migrate_children: bool = False) -> None:
         '''Demotes primary, by remapping it to new_primary as a secondary and migrates the children if needed.'''
         if not self.is_primary(primary) or self.is_secondary(new_primary):
@@ -92,6 +97,8 @@ class Mapper:
         self._add_mapping(new_primary, primary)
         for child in children:
             self._add_mapping(new_primary, child)
+
+        self._log_mappings()
 
     def get_primary(self, secondary: bytes) -> bytes:
         if not self.is_secondary(secondary):
@@ -115,9 +122,12 @@ class Mapper:
     def is_known(self, id: bytes) -> bool:
         return self.is_primary(id) or self.is_secondary(id)
     
+    def _log_mappings(self) -> None:
+        logger.warn(dict_to_text(self._secondaries_by_primary))
+    
 
 class ExpiringMapper(Mapper):
-    def __init__(self, id_expiration_age_s: int = 120) -> None:
+    def __init__(self, id_expiration_age_s: int = 30) -> None:
         super().__init__()
 
         self._id_expiration_age_s = id_expiration_age_s
