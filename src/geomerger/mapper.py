@@ -2,7 +2,7 @@ import inspect
 import logging
 import time
 from collections import defaultdict
-from typing import Any, Dict, List
+from typing import Any, Dict, List, NamedTuple
 
 from ratelimit import limits
 
@@ -12,12 +12,12 @@ logger = logging.getLogger(__name__)
 def dict_to_text(d: Dict):
     text = ''
     for k, v in d.items():
-        text += f'\n{k.hex()[:4]}:'
+        text += f'\n{k}:'
         if isinstance(v, list):
             for e in v:
-                text += f'\n  {e.hex()[:4]}'
+                text += f'\n  {e}'
         else:
-            text += f'\n  {v.hex()[:4]}'
+            text += f'\n  {v}'
     return text
 
 def id_to_str(id: bytes) -> str:
@@ -28,6 +28,14 @@ class MapperError(Exception):
     pass
 
 
+class MapperEntry(NamedTuple):
+    source_id: str
+    object_id: bytes
+
+    def __repr__(self):
+        return f'[sid={self.source_id}, oid={id_to_str(self.object_id)}]'
+
+
 class Mapper:
     '''
     This is essentially a collection of small trees with a deliberately limited set of operations available.
@@ -35,11 +43,13 @@ class Mapper:
     '''
     
     def __init__(self) -> None:
-        self._secondaries_by_primary: Dict[bytes, List[bytes]] = defaultdict(list)
-        self._primary_by_secondary: Dict[bytes, bytes] = defaultdict(lambda: None)
+        self._secondaries_by_primary: Dict[MapperEntry, List[MapperEntry]] = defaultdict(list)
+        self._primary_by_secondary: Dict[MapperEntry, MapperEntry] = defaultdict(lambda: None)
 
-    def map_secondary(self, secondary: bytes, primary: bytes) -> None:
+    def map_secondary(self, secondary: MapperEntry, primary: MapperEntry) -> None:
         '''Add a mapping from primary to secondary if it does not exist yet.'''
+        if primary.source_id == secondary.source_id:
+            raise MapperError(f'Primary {primary} and secondary {secondary} have the same source_id')
 
         if self.is_secondary(secondary):
             if self.is_secondary_for(secondary, primary):
@@ -47,30 +57,33 @@ class Mapper:
                 return
             else:
                 other_primary = self.get_primary(secondary)
-                raise MapperError(f'Secondary {id_to_str(secondary)} already mapped to primary {id_to_str(other_primary)}')
+                raise MapperError(f'Secondary {secondary} already mapped to primary {other_primary}')
         
         self._add_mapping(primary, secondary)
 
         self._log_mappings()
 
-    def _add_mapping(self, primary: bytes, secondary: bytes) -> None:
+    def _add_mapping(self, primary: MapperEntry, secondary: MapperEntry) -> None:
         self._secondaries_by_primary[primary].append(secondary)
         self._primary_by_secondary[secondary] = primary
 
-    def _remove_primary(self, primary: bytes) -> None:
+    def _remove_primary(self, primary: MapperEntry) -> None:
         secondaries = self._secondaries_by_primary.pop(primary, None)
         if secondaries is not None:
             for sec in secondaries:
                 self._primary_by_secondary.pop(sec, None)
 
-    def _remove_secondary(self, secondary: bytes) -> None:
+    def _remove_secondary(self, secondary: MapperEntry) -> None:
         primary = self._primary_by_secondary.pop(secondary, None)
         if primary is not None:
             self._primary_by_secondary[secondary]
 
-    def remap_secondary(self, secondary: bytes, new_primary: bytes) -> None:
+    def remap_secondary(self, secondary: MapperEntry, new_primary: MapperEntry) -> None:
+        if secondary.source_id == new_primary.source_id:
+            raise MapperError(f'Secondary {secondary} and new_primary {new_primary} have the same source_id')
+        
         if not self.is_secondary(secondary):
-            raise MapperError(f'{id_to_str(secondary)} is not secondary.')
+            raise MapperError(f'{secondary} is not secondary.')
 
         if self.is_secondary_for(secondary, new_primary):
             # Correct, do nothing
@@ -83,10 +96,13 @@ class Mapper:
 
         self._log_mappings()
 
-    def demote_primary(self, primary: bytes, new_primary: bytes, migrate_children: bool = False) -> None:
+    def demote_primary(self, primary: MapperEntry, new_primary: MapperEntry, migrate_children: bool = False) -> None:
         '''Demotes primary, by remapping it to new_primary as a secondary and migrates the children if needed.'''
+        if primary.source_id == new_primary.source_id:
+            raise MapperError(f'Primary {primary} and new_primary {new_primary} have the same source_id')
+        
         if not self.is_primary(primary) or self.is_secondary(new_primary):
-            raise MapperError(f'Primary {id_to_str(primary)} or new primary {id_to_str(new_primary)} is not primary.')
+            raise MapperError(f'Primary {primary} or new primary {new_primary} is not primary.')
 
         children = []
         if migrate_children:
@@ -100,41 +116,41 @@ class Mapper:
 
         self._log_mappings()
 
-    def get_primary(self, secondary: bytes) -> bytes:
+    def get_primary(self, secondary: MapperEntry) -> MapperEntry:
         if not self.is_secondary(secondary):
-            raise MapperError(f'Secondary {id_to_str(secondary)} is not secondary.')
+            raise MapperError(f'Secondary {secondary} is not secondary.')
         return self._primary_by_secondary[secondary]
     
-    def get_secondaries(self, primary: bytes) -> List[bytes]:
+    def get_secondaries(self, primary: MapperEntry) -> List[MapperEntry]:
         if not self.is_primary(primary):
-            raise MapperError(f'Primary {id_to_str(primary)} is not primary.')
+            raise MapperError(f'Primary {primary} is not primary.')
         return self._secondaries_by_primary[primary]
 
-    def is_primary(self, id: bytes) -> bool:
-        return id in self._secondaries_by_primary
+    def is_primary(self, entry: MapperEntry) -> bool:
+        return entry in self._secondaries_by_primary
 
-    def is_secondary(self, id: bytes) -> bool:
-        return id in self._primary_by_secondary
+    def is_secondary(self, entry: MapperEntry) -> bool:
+        return entry in self._primary_by_secondary
     
-    def is_secondary_for(self, id: bytes, primary: bytes) -> bool:
-        return self.is_primary(primary) and id in self._secondaries_by_primary[primary]
+    def is_secondary_for(self, secondary: MapperEntry, primary: MapperEntry) -> bool:
+        return self.is_primary(primary) and secondary in self._secondaries_by_primary[primary]
 
-    def is_known(self, id: bytes) -> bool:
-        return self.is_primary(id) or self.is_secondary(id)
+    def is_known(self, entry: MapperEntry) -> bool:
+        return self.is_primary(entry) or self.is_secondary(entry)
     
     def _log_mappings(self) -> None:
-        logger.warn(dict_to_text(self._secondaries_by_primary))
+        logger.warning(dict_to_text(self._secondaries_by_primary))
     
 
 class ExpiringMapper(Mapper):
-    def __init__(self, id_expiration_age_s: int = 30) -> None:
+    def __init__(self, entry_expiration_age_s: int = 30) -> None:
         super().__init__()
 
-        self._id_expiration_age_s = id_expiration_age_s
-        self._ids_last_seen: Dict[bytes, float] = {}
-        self._expire_ids_limited = limits(calls=10, period=self._id_expiration_age_s, raise_on_limit=False)(self._expire_ids)
+        self._entry_expiration_age_s = entry_expiration_age_s
+        self._entries_last_seen: Dict[MapperEntry, float] = {}
+        self._expire_entries_limited = limits(calls=10, period=self._entry_expiration_age_s, raise_on_limit=False)(self._expire_entries)
         
-        # Wrap all methods part of the public API to transparently track and expire ids
+        # Wrap all methods part of the public API to transparently track and expire entries
         for name, method in inspect.getmembers(self, predicate=inspect.ismethod):
             if not name.startswith('_'):
                 setattr(self, name, self._wrap_method(method))
@@ -142,15 +158,15 @@ class ExpiringMapper(Mapper):
     def _wrap_method(self, method):
         def wrapper(*args, **kwargs):
             for arg in [*args, *kwargs.values()]:
-                if isinstance(arg, bytes):
-                    self._ids_last_seen[arg] = time.time()
-            self._expire_ids_limited()
+                if isinstance(arg, MapperEntry):
+                    self._entries_last_seen[arg] = time.time()
+            self._expire_entries_limited()
             return method(*args, **kwargs)
         return wrapper
     
-    def _expire_ids(self):
-        expired_ids = [id for id, last_seen in self._ids_last_seen.items() if time.time() - last_seen > self._id_expiration_age_s]
-        for id in expired_ids:
-            self._remove_primary(id)
-            self._remove_secondary(id)
-            self._ids_last_seen.pop(id, None)
+    def _expire_entries(self):
+        expired_entries = [entry for entry, last_seen in self._entries_last_seen.items() if time.time() - last_seen > self._entry_expiration_age_s]
+        for entry in expired_entries:
+            self._remove_primary(entry)
+            self._remove_secondary(entry)
+            self._entries_last_seen.pop(entry, None)

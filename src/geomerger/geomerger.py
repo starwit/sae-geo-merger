@@ -1,8 +1,8 @@
 import logging
 import time
-from collections import defaultdict, deque
+from collections import defaultdict
 from statistics import fmean
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from prometheus_client import Counter, Histogram, Summary
 from visionapi.messages_pb2 import Detection, SaeMessage
@@ -10,7 +10,9 @@ from visionapi.messages_pb2 import Detection, SaeMessage
 from .buffer import MessageBuffer
 from .config import LogLevel, MergingConfig
 from .geo import Coord, distance_m
-from .mapper import Mapper, ExpiringMapper
+from .mapper import ExpiringMapper
+from .mapper import MapperEntry as ME
+from .mapper import MapperError
 
 logging.basicConfig(format='%(asctime)s %(name)-15s %(levelname)-8s %(processName)-10s %(message)s')
 logger = logging.getLogger(__name__)
@@ -28,7 +30,7 @@ class GeoMerger:
 
         self._buffer = MessageBuffer(target_window_size_ms=config.merging_window_ms)
         self._last_emission = 0
-        self._mapper = ExpiringMapper(id_expiration_age_s=config.expire_ids_after_s)
+        self._mapper = ExpiringMapper(entry_expiration_age_s=config.expire_ids_after_s)
 
     def __call__(self, input_proto) -> Any:
         return self.get(input_proto)
@@ -42,45 +44,7 @@ class GeoMerger:
         if input_msg is not None:
             self._buffer.append(input_msg)
 
-        if self._buffer.is_healthy():
-            for buffer_msg in self._buffer:
-                for buffer_det in buffer_msg.detections:
-                    closest_det = self._find_closest_detection(buffer_msg, buffer_det)
-                    buffer_id = buffer_det.object_id
-                    
-                    if closest_det is not None:
-                        closest_id = closest_det.object_id
-
-                        # TODO This is (probably) a major bug: We do not check returned ids from the mapper if they belong to the same source (b/c we currently can't)
-                        match (
-                            self._mapper.is_primary(closest_id),
-                            self._mapper.is_secondary(closest_id),
-                            self._mapper.is_primary(buffer_id),
-                            self._mapper.is_secondary(buffer_id),
-                        ):
-                            case (False, False, False, False) | (True, False, False, False):
-                                # Both ids are new or the input is new
-                                self._mapper.map_secondary(buffer_id, closest_id)
-                                logger.info(f'Mapped {buffer_id.hex()[:4]} to {closest_id.hex()[:4]}')
-                            case (False, True, False, False):
-                                primary = self._mapper.get_primary(closest_id)
-                                if not primary == buffer_id:
-                                    self._mapper.map_secondary(buffer_id, primary)
-                                    logger.info(f'Mapped {buffer_id.hex()[:4]} to {primary.hex()[:4]}')
-                            case (False, True, True, False):
-                                primary = self._mapper.get_primary(closest_id)
-                                if not primary == buffer_id:
-                                    self._mapper.demote_primary(buffer_id, new_primary=primary, migrate_children=True)
-                                    logger.info(f'Demoted {buffer_id.hex()[:4]} to secondary of {primary.hex()[:4]}')
-                            case (True, False, True, False):
-                                self._mapper.demote_primary(buffer_id, new_primary=closest_id, migrate_children=True)
-                                logger.info(f'Demoted {buffer_id.hex()[:4]} to secondary of {closest_id.hex()[:4]}')
-                            case (True, False, False, True):
-                                if not self._mapper.is_secondary_for(buffer_id, primary=closest_id):
-                                    self._mapper.remap_secondary(buffer_id, closest_id)
-                                    logger.info(f'Remapped {buffer_id.hex()[:4]} to {closest_id.hex()[:4]}')
-                            case state:
-                                logger.error(f'This should not happen! Please debug. State: {state}; buffer_id: {buffer_det.object_id.hex()[:4]}; matched_id: {closest_id.hex()[:4]}')
+        self._update_mappings()
 
         out_buffer = self._buffer.pop_slice(min_slice_length_ms=(1 / self._config.target_mps))
         if len(out_buffer) == 0:
@@ -97,8 +61,58 @@ class GeoMerger:
         self._last_emission = time.time()
         return [(self._config.output_stream_id, self._pack_proto(out_msg))]
         
-    def _find_closest_detection(self, input_msg: SaeMessage, input_det: Detection) -> Optional[Detection]:
+    def _update_mappings(self):
+        try:
+            if self._buffer.is_healthy():
+                for buffer_msg in self._buffer:
+                    for buffer_det in buffer_msg.detections:
+                        match_det, match_msg = self._find_match(buffer_msg, buffer_det)
+                        
+                        if match_det is not None:
+                            match_entry = ME(match_msg.frame.source_id, match_det.object_id)
+                            buffer_entry = ME(buffer_msg.frame.source_id, buffer_det.object_id)
+
+                            match (
+                                self._mapper.is_primary(match_entry),
+                                self._mapper.is_secondary(match_entry),
+                                self._mapper.is_primary(buffer_entry),
+                                self._mapper.is_secondary(buffer_entry),
+                            ):
+                                case (False, False, False, False) | (True, False, False, False):
+                                    # Both ids are new or the input is new
+                                    self._mapper.map_secondary(buffer_entry, match_entry)
+                                    logger.info(f'Mapped {buffer_entry} to {match_entry}')
+                                case (False, True, False, False):
+                                    primary = self._mapper.get_primary(match_entry)
+                                    if not primary == buffer_entry and not primary.source_id == buffer_entry.source_id:
+                                        self._mapper.map_secondary(buffer_entry, primary)
+                                        logger.info(f'Mapped {buffer_entry} to {primary}')
+                                case (False, True, True, False):
+                                    primary = self._mapper.get_primary(match_entry)
+                                    if not primary == buffer_entry and not primary.source_id == buffer_entry.source_id:
+                                        self._mapper.demote_primary(buffer_entry, new_primary=primary, migrate_children=True)
+                                        logger.info(f'Demoted {buffer_entry} to secondary of {primary}')
+                                case (False, False, False, True):
+                                    primary = self._mapper.get_primary(buffer_entry)
+                                    if not primary == buffer_entry and not primary.source_id == match_entry.source_id:
+                                        self._mapper.map_secondary(match_entry, primary)
+                                        logger.info(f'Mapped {match_entry} to {primary}')
+                                case (True, False, True, False):
+                                    self._mapper.demote_primary(buffer_entry, new_primary=match_entry, migrate_children=True)
+                                    logger.info(f'Demoted {buffer_entry} to secondary of {match_entry}')
+                                case (True, False, False, True):
+                                    if not self._mapper.is_secondary_for(buffer_entry, primary=match_entry):
+                                        self._mapper.remap_secondary(buffer_entry, match_entry)
+                                        logger.info(f'Remapped {buffer_entry} to {match_entry}')
+                                case state:
+                                    logger.error(f'This should not happen! Please debug. State: {state}; buffer_entry: {buffer_entry}; match_entry: {match_entry}')
+        except MapperError:
+            logger.error(f'Illegal state encountered', exc_info=True)
+
+        
+    def _find_match(self, input_msg: SaeMessage, input_det: Detection) -> Tuple[Detection, SaeMessage]:
         closest_det: Detection = None
+        closest_msg: SaeMessage = None
         closest_distance: float = 999999
         for msg in self._buffer:
             # Do not match detections of the same source / camera
@@ -117,7 +131,8 @@ class GeoMerger:
                     if closest_distance > dist:
                         closest_distance = dist
                         closest_det = det
-        return closest_det
+                        closest_msg = msg
+        return closest_det, closest_msg
     
     def _is_similar(self, det1: Detection, det2: Detection):
         return all((
@@ -133,9 +148,9 @@ class GeoMerger:
     def _apply_mappings(self, messages: List[SaeMessage]) -> List[SaeMessage]:
         for msg in messages:
             for det in msg.detections:
-                if self._mapper.is_secondary(det.object_id):
-                    primary = self._mapper.get_primary(det.object_id)
-                    det.object_id = primary
+                if self._mapper.is_secondary(ME(msg.frame.source_id, det.object_id)):
+                    primary = self._mapper.get_primary(ME(msg.frame.source_id, det.object_id))
+                    det.object_id = primary.object_id
         return messages
     
     def _merge_messages(self, messages: List[SaeMessage]) -> SaeMessage:
