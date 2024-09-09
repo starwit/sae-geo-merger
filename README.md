@@ -13,11 +13,11 @@ In order to work with this repository, you need to ensure the following steps:
 - Install Docker with compose plugin
 - Make sure that your Python version matches the version constraint in `pyproject.toml` (if not, pyenv can help)
 - Clone main SAE repository (you will most likely need a running SAE to do anything useful): https://github.com/starwit/starwit-awareness-engine
-- Set up SAE compose file
-  - For geo-merger to do something useful, you need at least two synchronized camera streams with some overlap in their covered area
 
 ## Setup
-- Configure module: create `settings.yaml` by using `settings.template.yaml`
+- Set up SAE compose file
+  - For geo-merger to do something useful, you need at least two synchronized camera streams with some overlap in their covered area
+- Configure module: create settings.yaml by using settings.template.yaml
 - Run `poetry install`, this should install all necessary dependencies
 - Start docker compose version of the SAE (see here: https://github.com/starwit/starwit-awareness-engine/blob/main/docker-compose/README.md)
 - Run `poetry run python main.py`
