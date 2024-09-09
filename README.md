@@ -17,6 +17,7 @@ In order to work with this repository, you need to ensure the following steps:
   - For geo-merger to do something useful, you need at least two synchronized camera streams with some overlap in their covered area
 
 ## Setup
+- Configure module: create settings.yaml by using settings.template.yaml
 - Run `poetry install`, this should install all necessary dependencies
 - Start docker compose version of the SAE (see here: https://github.com/starwit/starwit-awareness-engine/blob/main/docker-compose/README.md)
 - Run `poetry run python main.py`
