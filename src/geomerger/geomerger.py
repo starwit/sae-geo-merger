@@ -2,17 +2,18 @@ import logging
 import time
 from collections import defaultdict
 from statistics import fmean
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
+import datetime as dt
 
 from prometheus_client import Counter, Histogram, Summary
 from visionapi.messages_pb2 import Detection, SaeMessage
 
-from .buffer import MessageBuffer
 from .config import LogLevel, MergingConfig
 from .geo import Coord, distance_m
 from .mapper import ExpiringMapper
 from .mapper import MapperEntry as ME
 from .mapper import MapperError
+from .model import AreaModel, ObservedObject, CameraAreaObservation, Observation
 
 logging.basicConfig(format='%(asctime)s %(name)-15s %(levelname)-8s %(processName)-10s %(message)s')
 logger = logging.getLogger(__name__)
@@ -23,13 +24,25 @@ OBJECT_COUNTER = Counter('geo_merger_object_counter', 'How many detections have 
 PROTO_SERIALIZATION_DURATION = Summary('geo_merger_proto_serialization_duration', 'The time it takes to create a serialized output proto')
 PROTO_DESERIALIZATION_DURATION = Summary('geo_merger_proto_deserialization_duration', 'The time it takes to deserialize an input proto')
 
+def sae_message_to_model(msg: SaeMessage) -> CameraAreaObservation:
+    datetime = dt.datetime.fromtimestamp(msg.frame.timestamp_utc_ms / 1000)
+    id = msg.frame.source_id
+
+    observations = []
+    for det in msg.detections:
+        position = Observation(datetime, Coord(det.geo_coordinate.latitude, det.geo_coordinate.longitude))
+        observations.append(ObservedObject(det.object_id, position))
+
+    cam_obs = CameraAreaObservation(id, observations)
+
+    return cam_obs
+
+
 class GeoMerger:
     def __init__(self, config: MergingConfig, log_level: LogLevel) -> None:
         logger.setLevel(log_level.value)
         self._config = config
-
-        self._buffer = MessageBuffer(target_window_size_ms=config.merging_window_ms)
-        self._last_emission = 0
+        self._area_model = AreaModel()
         self._mapper = ExpiringMapper(entry_expiration_age_s=config.expire_ids_after_s)
 
     def __call__(self, input_proto) -> Any:
@@ -41,25 +54,32 @@ class GeoMerger:
         if input_proto is not None:
             input_msg = self._unpack_proto(input_proto)
 
+        # 1. Feed input to model
         if input_msg is not None:
-            self._buffer.append(input_msg)
+            self._area_model.observe(sae_message_to_model(input_msg))
+
+        # 2. Find objects from different cameras that are closer than a certain threshold (and have been for some time)
+        # This needs to be somewhat efficient, b/c the naive implementation is exponential with num cameras and objects
+
+        # 3. Map those objects onto the same id and save that mapping
+        # Check existing mappings if some distances are over the merging threshold (and have been for some time)
+
+        # 4. Create a new output message with all known (not expired) objects and their current (interpolated and merged by avg) positions
+
 
         self._update_mappings()
-
-        out_buffer = self._buffer.pop_slice(min_slice_length_ms=(1 / self._config.target_mps))
-        if len(out_buffer) == 0:
-            return []
 
         # Apply active mappings to all outgoing messages
         out_buffer = self._apply_mappings(out_buffer)
 
-        # Remove all duplicate detections but the first
-        out_msg = self._merge_messages(out_buffer)
+        out_msg = self._create_output_message()
 
-        # logger.debug(f'len buf: {len(self._buffer)}; len out: {len(out_buffer)}; since last: {round(time.time() - self._last_emission, 3)}')
-
-        self._last_emission = time.time()
         return [(self._config.output_stream_id, self._pack_proto(out_msg))]
+    
+    def _create_output_message(self) -> SaeMessage:
+        model_time = self._area_model.current_time()
+
+
         
     def _update_mappings(self):
         try:
