@@ -1,3 +1,4 @@
+import time
 from collections import deque
 from datetime import datetime
 from typing import Deque, Dict, NamedTuple, Optional, Tuple
@@ -10,6 +11,7 @@ class Position(NamedTuple):
     coord: Coord
 
 
+# TODO find a good way to expire objects
 class CameraAreaModel:
     '''
         This class represents the area (in geo-coordinate space) covered by a single camera. It must be fed object observations and is NOT class aware.
@@ -22,12 +24,11 @@ class CameraAreaModel:
     def observe_object(self, object_id: bytes, coord: Coord, time: datetime) -> None:
         if object_id not in self._objects:
             self._objects[object_id] = ObjectPositionModel(object_id)
-        else:
-            self._objects[object_id].observe(coord, time)
+        self._objects[object_id].observe(coord, time)
 
     def find_closest_object(self, ref_coord: Coord, at_time: datetime) -> Optional[Tuple[bytes, float]]:
         '''Finds closest object to ref_coord by euclidean distance in coord space.'''
-        distance = None
+        distance = float('inf')
         id = None
         for obj in self._objects.values():
             cur_distance = self._get_distance(ref_coord, obj.get_position(at_time))
@@ -49,13 +50,15 @@ class ObjectPositionModel:
     def __init__(self, id: bytes) -> None:
         self._id = id
         self._positions: Deque[Position] = deque(maxlen=2)
+        self._last_update_ts: float = time.time()
 
     @property
     def id(self) -> bytes:
         return self._id
     
-    def observe(self, coord: Coord, time: datetime) -> None:
-        self._positions.append(Position(time, coord))
+    def observe(self, coord: Coord, at_time: datetime) -> None:
+        self._positions.append(Position(at_time, coord))
+        self._last_update_ts = time.time()
 
     def get_position(self, at_time: datetime) -> Optional[Coord]:
         if len(self._positions) == 0:
@@ -86,5 +89,5 @@ class ObjectPositionModel:
 
         return speed_lat, speed_lon
 
-    def last_seen(self) -> datetime:
-        return self._positions[-1][0]
+    def last_updated(self) -> float:
+        return self._last_update_ts
