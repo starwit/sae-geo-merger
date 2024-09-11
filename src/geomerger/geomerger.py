@@ -60,75 +60,39 @@ class GeoMerger:
 
         # 2. Find objects from different cameras that are closer than a certain threshold (and have been for some time)
         # This needs to be somewhat efficient, b/c the naive implementation is exponential with num cameras and objects
-
-        # 3. Map those objects onto the same id and save that mapping
-        # Check existing mappings if some distances are over the merging threshold (and have been for some time)
-
-        # 4. Create a new output message with all known (not expired) objects and their current (interpolated and merged by avg) positions
-
-
         self._update_mappings()
 
-        # Apply active mappings to all outgoing messages
-        out_buffer = self._apply_mappings(out_buffer)
+
 
         out_msg = self._create_output_message()
 
         return [(self._config.output_stream_id, self._pack_proto(out_msg))]
-    
-    def _create_output_message(self) -> SaeMessage:
-        model_time = self._area_model.current_time()
-
-
-        
+            
     def _update_mappings(self):
-        try:
-            if self._buffer.is_healthy():
-                for buffer_msg in self._buffer:
-                    for buffer_det in buffer_msg.detections:
-                        match_det, match_msg = self._find_match(buffer_msg, buffer_det)
-                        
-                        if match_det is not None:
-                            match_entry = ME(match_msg.frame.source_id, match_det.object_id)
-                            buffer_entry = ME(buffer_msg.frame.source_id, buffer_det.object_id)
+        pass
+        # 1. Get all objects from model 
+        # 2. Run algorithm to identify closest object (from other cameras) for each object
+        # 2b. If any pairing has more than two entries (i.e. more than two cameras overlap in the same area) log warning and skip
+        # 3. Check pairings if merging criteria are met (start with distance only)
+        # 4. Save found mappings into mapper
+        # 5. Prune pairings from mapper that do not fulfill mapping criteria anymore (distance only at first / no state)
 
-                            match (
-                                self._mapper.is_primary(match_entry),
-                                self._mapper.is_secondary(match_entry),
-                                self._mapper.is_primary(buffer_entry),
-                                self._mapper.is_secondary(buffer_entry),
-                            ):
-                                case (False, False, False, False) | (True, False, False, False):
-                                    # Both ids are new or the input is new
-                                    self._mapper.map_secondary(buffer_entry, match_entry)
-                                    logger.info(f'Mapped {buffer_entry} to {match_entry}')
-                                case (False, True, False, False):
-                                    primary = self._mapper.get_primary(match_entry)
-                                    if not primary == buffer_entry and not primary.source_id == buffer_entry.source_id:
-                                        self._mapper.map_secondary(buffer_entry, primary)
-                                        logger.info(f'Mapped {buffer_entry} to {primary}')
-                                case (False, True, True, False):
-                                    primary = self._mapper.get_primary(match_entry)
-                                    if not primary == buffer_entry and not primary.source_id == buffer_entry.source_id:
-                                        self._mapper.demote_primary(buffer_entry, new_primary=primary, migrate_children=True)
-                                        logger.info(f'Demoted {buffer_entry} to secondary of {primary}')
-                                case (False, False, False, True):
-                                    primary = self._mapper.get_primary(buffer_entry)
-                                    if not primary == buffer_entry and not primary.source_id == match_entry.source_id:
-                                        self._mapper.map_secondary(match_entry, primary)
-                                        logger.info(f'Mapped {match_entry} to {primary}')
-                                case (True, False, True, False):
-                                    self._mapper.demote_primary(buffer_entry, new_primary=match_entry, migrate_children=True)
-                                    logger.info(f'Demoted {buffer_entry} to secondary of {match_entry}')
-                                case (True, False, False, True):
-                                    if not self._mapper.is_secondary_for(buffer_entry, primary=match_entry):
-                                        self._mapper.remap_secondary(buffer_entry, match_entry)
-                                        logger.info(f'Remapped {buffer_entry} to {match_entry}')
-                                case state:
-                                    logger.error(f'This should not happen! Please debug. State: {state}; buffer_entry: {buffer_entry}; match_entry: {match_entry}')
-        except MapperError:
-            logger.error(f'Illegal state encountered', exc_info=True)
+    def _create_output_message(self) -> SaeMessage:
+        # 1. Create a new output message with all known (not expired) objects and their current (interpolated and merged by avg) positions
+        sae_msg = SaeMessage()
+        sae_msg.frame.source_id = self._config.output_stream_id
 
+        objects = self._area_model.get_all_observed_objects()
+        for obj in objects:
+            det = Detection()
+            det.class_id = 0
+            det.confidence = 1.0
+            det.object_id = obj.id
+            det.geo_coordinate.latitude = obj.obs.coord.lat
+            det.geo_coordinate.longitude = obj.obs.coord.lon
+            sae_msg.detections.append(det)
+
+        return sae_msg
         
     def _find_match(self, input_msg: SaeMessage, input_det: Detection) -> Tuple[Detection, SaeMessage]:
         closest_det: Detection = None
