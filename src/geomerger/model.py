@@ -21,24 +21,8 @@ class CameraAreaObservation(NamedTuple):
     objects: List[ObservedObject]
 
 
-class SimilarityStatement(NamedTuple):
-    candidates: List[bytes]
-    time: datetime
-
-
-class SimilarityTracker:
-    def __init__(self) -> None:
-        self._similarity_statements = List[SimilarityStatement]
-
-    def add_candidates(self, candidate_ids: List[bytes], at_time: datetime):
-        self._similarity_statements.append(SimilarityStatement(at_time, candidate_ids))
-        # TODO check up to a certain time delta if some candidate combinations appear, if yes, merge them (where do we do that? here?)
-
-
 class AreaModel:
-    def __init__(self, merging_threshold_m: float) -> None:
-        self._merging_threshold_m = merging_threshold_m
-        self._similarity_tracker = SimilarityTracker()
+    def __init__(self) -> None:
         self._cam_models: Dict[str, CameraAreaModel] = dict()
         self._last_update_ts = time.time()
         self._most_recent_obs_dt = datetime.fromtimestamp(0)
@@ -58,7 +42,15 @@ class AreaModel:
         elapsed_time = time.time() - self._last_update_ts
         return self._most_recent_obs_dt + timedelta(seconds=elapsed_time)
     
-    def _find_closest_objects(self, ref_coord: Coord, ref_camera_id: str, at_time: datetime) -> List[Tuple[bytes, float]]:
+    def get_all_observed_objects(self) -> List[ObservedObject]:
+        '''Retrieves all observed objects at current model time'''
+        current_time = self.current_time()
+        objects = []
+        for cam in self._cam_models.values():
+            objects += cam.get_all_objects(current_time)
+        return objects
+    
+    def find_closest_objects(self, ref_coord: Coord, ref_camera_id: str, at_time: datetime) -> List[Tuple[bytes, float]]:
         candidates: List[Tuple[bytes, float]] = []
         for cam in [c for c in self._cam_models.values() if c.id != ref_camera_id]:
             id, distance = cam.find_closest_object(ref_coord, at_time)
@@ -77,23 +69,37 @@ class CameraAreaModel:
         self._id = id
         self._objects: Dict[bytes, ObjectPositionModel] = dict()
 
+    def get_all_objects(self, at_time: datetime) -> List[ObservedObject]:
+        objects = []
+        for obj in self._objects.values():
+            pos = obj.get_position(at_time)
+            if pos is not None:
+                objects.append(ObservedObject(obj.id, Observation(at_time, pos)))
+        return objects
+
     def observe_object(self, obs: ObservedObject) -> None:
         if obs.id not in self._objects:
             self._objects[obs.id] = ObjectPositionModel(obs.id)
-        self._objects[obs.id].observe(obs.obs.coord, time)
+        self._objects[obs.id].observe(obs.obs.coord, obs.obs.time)
 
-    def find_closest_object(self, ref_coord: Coord, at_time: datetime) -> Optional[Tuple[bytes, float]]:
+    def find_closest_object(self, ref_coord: Coord, at_time: datetime) -> Optional[ObservedObject]:
         '''Finds closest object to ref_coord by euclidean distance in coord space.'''
         distance = float('inf')
-        id = None
+        closest_obj = None
+        closest_obj_pos = None
         for obj in self._objects.values():
             # TODO Check if last object observation is higher than the expiring threshold and then delete it
-            cur_distance = self._get_distance(ref_coord, obj.get_position(at_time))
+            obj_position = obj.get_position(at_time)
+            cur_distance = self._get_distance(ref_coord, obj_position)
             if cur_distance < distance:
                 distance = cur_distance
-                id = obj.id
+                closest_obj = obj
+                closest_obj_pos = obj_position
         
-        return id, distance
+        if closest_obj is None:
+            return None
+        
+        return ObservedObject(closest_obj.id, Observation(at_time, closest_obj_pos))
     
     def _get_distance(self, c1: Coord, c2: Coord) -> float:
         return ((c1.lat - c2.lat) ** 2 + (c1.lon - c2.lon) ** 2) ** 0.5
@@ -140,6 +146,9 @@ class ObjectPositionModel:
         delta_lon = pt2.coord.lon - pt1.coord.lon
 
         delta_t = pt2.time.timestamp() - pt1.time.timestamp()
+
+        if delta_t == 0:
+            return 0, 0
 
         speed_lat = delta_lat / delta_t
         speed_lon = delta_lon / delta_t
