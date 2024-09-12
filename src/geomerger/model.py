@@ -1,7 +1,7 @@
 import time
 from collections import deque
 from datetime import datetime, timedelta
-from typing import Deque, Dict, List, NamedTuple, Optional, Tuple
+from typing import Deque, Dict, List, NamedTuple, Optional, Tuple, Iterable
 
 from .geo import Coord
 
@@ -27,7 +27,6 @@ class AreaModel:
         self._last_update_ts = time.time()
         self._most_recent_obs_dt = datetime.fromtimestamp(0)
 
-    # IDEA implement similarity search on every observe, that way we know that we process every observation only once
     def observe(self, msg: CameraAreaObservation):
         if msg.id not in self._cam_models:
             self._cam_models[msg.id] = CameraAreaModel(msg.id)
@@ -57,6 +56,10 @@ class AreaModel:
             if id is not None:
                 candidates.append((id, distance))
         return candidates
+    
+    def expire_objects(self, expiration_age_s: float) -> None:
+        for cam in self._cam_models.values():
+            cam.expire_objects(expiration_age_s)
 
 
 # TODO find a good way to expire objects. That we definitely need!
@@ -103,7 +106,13 @@ class CameraAreaModel:
     
     def _get_distance(self, c1: Coord, c2: Coord) -> float:
         return ((c1.lat - c2.lat) ** 2 + (c1.lon - c2.lon) ** 2) ** 0.5
-
+    
+    def expire_objects(self, expiration_age_s: float) -> None:
+        current_time = time.time()
+        for obj_id in list(self._objects.keys()):
+            if self._objects[obj_id].last_updated() + expiration_age_s < current_time:
+                del self._objects[obj_id]
+    
 
 class ObjectPositionModel:
     '''

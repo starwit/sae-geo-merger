@@ -62,7 +62,7 @@ class GeoMerger:
         # This needs to be somewhat efficient, b/c the naive implementation is exponential with num cameras and objects
         self._update_mappings()
 
-
+        self._area_model.expire_objects(expiration_age_s=0.5)
 
         out_msg = self._create_output_message()
 
@@ -83,6 +83,7 @@ class GeoMerger:
         sae_msg.frame.source_id = self._config.output_stream_id
 
         objects = self._area_model.get_all_observed_objects()
+        # TODO Here we need to do the merging according to saved mappings
         for obj in objects:
             det = Detection()
             det.class_id = 0

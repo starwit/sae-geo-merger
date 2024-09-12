@@ -1,4 +1,5 @@
 from datetime import datetime
+import time
 
 from geomerger.geo import Coord
 from geomerger.model import (AreaModel, CameraAreaModel, CameraAreaObservation,
@@ -54,6 +55,26 @@ def test_camera_area_model():
     testee.find_closest_object(Coord(2,0), datetime.fromtimestamp(0)) == b'obj1'
     testee.find_closest_object(Coord(2,0), datetime.fromtimestamp(10)) == b'obj1'
     testee.find_closest_object(Coord(11,0), datetime.fromtimestamp(0)) == b'obj2'
+
+def test_camera_area_model_expiration():
+    testee = CameraAreaModel('cam1')
+
+    obs11 = ObservedObject(b'obj1', Observation(datetime.fromtimestamp(0), Coord(0,0)))
+    obs12 = ObservedObject(b'obj1', Observation(datetime.fromtimestamp(10), Coord(1,0)))
+    obs21 = ObservedObject(b'obj2', Observation(datetime.fromtimestamp(0), Coord(20,0)))
+
+    testee.observe_object(obs11)
+    testee.observe_object(obs21)
+
+    assert len(testee.get_all_objects(at_time=datetime.fromtimestamp(10))) == 2
+
+    time.sleep(0.10)
+
+    testee.observe_object(obs12)
+
+    testee.expire_objects(expiration_age_s=0.05)
+
+    assert len(testee.get_all_objects(at_time=datetime.fromtimestamp(10))) == 1
 
 def test_area_model():
     testee = AreaModel()
