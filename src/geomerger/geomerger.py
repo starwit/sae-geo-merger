@@ -58,23 +58,34 @@ class GeoMerger:
         if input_msg is not None:
             self._area_model.observe(sae_message_to_model(input_msg))
 
-        # 2. Find objects from different cameras that are closer than a certain threshold (and have been for some time)
-        # This needs to be somewhat efficient, b/c the naive implementation is exponential with num cameras and objects
-        self._update_mappings()
-
         self._area_model.expire_objects(expiration_age_s=0.5)
+
+        self._update_mappings()
 
         out_msg = self._create_output_message()
 
         return [(self._config.output_stream_id, self._pack_proto(out_msg))]
             
     def _update_mappings(self):
-        pass
         # 1. Get all objects from model 
+        # objects_by_cam = self._area_model.get_all_observed_objects()
+
         # 2. Run algorithm to identify closest object (from other cameras) for each object
         # 2b. If any pairing has more than two entries (i.e. more than two cameras overlap in the same area) log warning and skip
+        current_model_time = self._area_model.current_time()
+        clusters = self._area_model.find_object_clusters(current_model_time)
+        print('\n--- update_mappings ---\n')
+        print(f'ts={current_model_time}')
+        for c in clusters:
+            if len(c) == 2:
+                print(round(c[1][2], 2), c)
+            else:
+                print(c)
+
+        
         # 3. Check pairings if merging criteria are met (start with distance only)
         # 4. Save found mappings into mapper
+        # Question: do we even need a mapper now? Yes, we need the mapper for stable primary ids.
         # 5. Prune pairings from mapper that do not fulfill mapping criteria anymore (distance only at first / no state)
 
     def _create_output_message(self) -> SaeMessage:
