@@ -10,7 +10,7 @@ from visionapi.messages_pb2 import Detection, SaeMessage
 
 from .config import LogLevel, MergingConfig
 from .geo import Coord, distance_m
-from .mapper import ExpiringMapper
+from .mapper import Mapper
 from .mapper import MapperEntry as ME
 from .mapper import MapperError
 from .model import AreaModel, ObservedObject, CameraAreaObservation, Observation
@@ -42,8 +42,8 @@ class GeoMerger:
     def __init__(self, config: MergingConfig, log_level: LogLevel) -> None:
         logger.setLevel(log_level.value)
         self._config = config
-        self._area_model = AreaModel()
-        self._mapper = ExpiringMapper(entry_expiration_age_s=config.expire_ids_after_s)
+        self._area_model = AreaModel(config.max_distance_m)
+        self._mapper = Mapper()
 
     def __call__(self, input_proto) -> Any:
         return self.get(input_proto)
@@ -65,37 +65,75 @@ class GeoMerger:
         out_msg = self._create_output_message()
 
         return [(self._config.output_stream_id, self._pack_proto(out_msg))]
-            
+
     def _update_mappings(self):
         # 1. Get all objects from model 
         # objects_by_cam = self._area_model.get_all_observed_objects()
 
         # 2. Run algorithm to identify closest object (from other cameras) for each object
-        # 2b. If any pairing has more than two entries (i.e. more than two cameras overlap in the same area) log warning and skip
+        # TODO If any pairing has more than two entries (i.e. more than two cameras overlap in the same area) log warning and skip(?)
         current_model_time = self._area_model.current_time()
         clusters = self._area_model.find_object_clusters(current_model_time)
+
         print('\n--- update_mappings ---\n')
         print(f'ts={current_model_time}')
         for c in clusters:
             if len(c) == 2:
-                print(round(c[1][2], 2), c)
+                print(f'{c[1].distance:.2f}', c)
             else:
                 print(c)
 
-        
-        # 3. Check pairings if merging criteria are met (start with distance only)
         # 4. Save found mappings into mapper
         # Question: do we even need a mapper now? Yes, we need the mapper for stable primary ids.
-        # 5. Prune pairings from mapper that do not fulfill mapping criteria anymore (distance only at first / no state)
+        # Maybe also save the clusters? (and use them for later reference / to implement some form of dampening, averaging over time)
+        for c in clusters:
+            match1 = ME(c[0].camera_id, c[0].obj.id)
+            match2 = ME(c[1].camera_id, c[1].obj.id)
+
+            match (
+                self._mapper.is_primary(match1),
+                self._mapper.is_secondary(match1),
+                self._mapper.is_primary(match2),
+                self._mapper.is_secondary(match2),
+            ):
+                case (False, False, False, False) | (True, False, False, False):
+                    # both are new | match1 is already primary and match2 is new
+                    self._mapper.map_secondary(match2, match1)
+                case (False, False, True, False):
+                    # match2 is already primary and match2 is new
+                    self._mapper.map_secondary(match1, match2)
+                case (False, True, False, False):
+                    # match1 is secondary and match2 is new
+                    self._mapper.remap_secondary(match1, match2)
+                case (False, False, False, True):
+                    # match2 is secondary and match1 is new
+                    self._mapper.remap_secondary(match2, match1)
+                case (True, False, False, True):
+                    # match1 is primary with match2 secondary (the standard case, then check if mapping is correct)
+                    if not self._mapper.is_secondary_for(match2, match1):
+                        self._mapper.remap_secondary(match2, match1)
+                case (False, True, True, False):
+                    # match2 is primary with match1 secondary (the standard case, then check if mapping is correct)
+                    if not self._mapper.is_secondary_for(match1, match2):
+                        self._mapper.remap_secondary(match1, match2)
+                case state:
+                    logger.error(f'This should not happen! Please debug. State: {state}, match1: {match1}, match2: {match2}')                
+
+        # 5. Prune pairings from mapper that do not fulfill mapping criteria anymore (distance only at first / no state) -> it is probably okay if mapper expires old mappings automatically
+        # TODO Call expiry method here explicitly for readability?
 
     def _create_output_message(self) -> SaeMessage:
         # 1. Create a new output message with all known (not expired) objects and their current (interpolated and merged by avg) positions
         sae_msg = SaeMessage()
         sae_msg.frame.source_id = self._config.output_stream_id
 
+        # Iterate over all objects (we do not need to know about the camera by this point anymore)
+        # If encountered object is secondary, skip
+        # If encountered object is primary, fetch secondary/ies and calculated position average
+
         objects = self._area_model.get_all_observed_objects()
-        # TODO Here we need to do the merging according to saved mappings
         for obj in objects:
+            
             det = Detection()
             det.class_id = 0
             det.confidence = 1.0

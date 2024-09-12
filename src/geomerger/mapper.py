@@ -164,6 +164,7 @@ class ExpiringMapper(Mapper):
             return method(*args, **kwargs)
         return wrapper
     
+    # TODO Check if this is really correct. I'm not sure if we should really just delete the entry if it was a primary and the secondaries are still alive... (probably not)
     def _expire_entries(self):
         expired_entries = [entry for entry, last_seen in self._entries_last_seen.items() if time.time() - last_seen > self._entry_expiration_age_s]
         for entry in expired_entries:

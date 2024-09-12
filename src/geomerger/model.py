@@ -23,9 +23,16 @@ class CameraAreaObservation(NamedTuple):
     id: str
     objects: List[ObservedObject]
 
+    
+class ClusterEntry(NamedTuple):
+    camera_id: str
+    obj: ObservedObject
+    distance: float
+
 
 class AreaModel:
-    def __init__(self) -> None:
+    def __init__(self, merging_threshold_m: float) -> None:
+        self._merging_threshold_m = merging_threshold_m
         self._cam_models: Dict[str, CameraAreaModel] = dict()
         self._last_update_ts = time.time()
         self._most_recent_obs_dt = datetime.fromtimestamp(0)
@@ -44,7 +51,7 @@ class AreaModel:
         elapsed_time = time.time() - self._last_update_ts
         return self._most_recent_obs_dt + timedelta(seconds=elapsed_time)
     
-    def get_all_observed_objects(self) -> Dict[str, List[ObservedObject]]:
+    def get_all_observed_objects(self) -> List[ObservedObject]:
         '''Retrieves all observed objects at current model time by camera id'''
         current_time = self.current_time()
         objects = []
@@ -52,20 +59,32 @@ class AreaModel:
             objects += cam.get_all_objects(current_time)
         return objects
     
-    def find_object_clusters(self, at_time: datetime) -> List[Tuple[str, ObservedObject]]:
-        clusters: List[Tuple[str, ObservedObject]] = []
+    def find_object_clusters(self, at_time: datetime) -> List[List[ClusterEntry]]:
+        clusters: List[List[ClusterEntry]] = []
+        seen_clusters = set()
         objects_by_cam = {c: m.get_all_objects(at_time) for c, m in self._cam_models.items()}
         for cam, objects in objects_by_cam.items():
             for obj in objects:
-                clusters.append([(cam, obj, 0)] + self._find_matching_objects(obj.obs.coord, cam, at_time))
+                matches = self._find_matching_objects(obj.obs.coord, cam, at_time)
+                if len(matches) > 0:
+                    cluster_candidate = [ClusterEntry(cam, obj, 0)] + matches
+                    if (h := self._cluster_hash(cluster_candidate)) not in seen_clusters:
+                        clusters.append(cluster_candidate)
+                        seen_clusters.add(h)
         return clusters
     
-    def _find_matching_objects(self, ref_coord: Coord, ref_camera_id: str, at_time: datetime) -> List[Tuple[str, ObservedObject]]:
-        candidates: List[Tuple[str, ObservedObject]] = []
+    def _cluster_hash(self, cluster: List[ClusterEntry]) -> int:
+        hash_acc = 0
+        for entry in cluster:
+            hash_acc += hash(entry.obj.id)
+        return hash_acc
+    
+    def _find_matching_objects(self, ref_coord: Coord, ref_camera_id: str, at_time: datetime) -> List[ClusterEntry]:
+        candidates: List[ClusterEntry] = []
         for cam in [c for c in self._cam_models.values() if c.id != ref_camera_id]:
             obj, distance = cam.find_closest_object(ref_coord, at_time)
-            if obj is not None:
-                candidates.append((cam.id, obj, distance))
+            if obj is not None and distance < self._merging_threshold_m:
+                candidates.append(ClusterEntry(cam.id, obj, distance))
         return candidates
     
     def expire_objects(self, expiration_age_s: float) -> None:
