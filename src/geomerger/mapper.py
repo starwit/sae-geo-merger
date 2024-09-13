@@ -2,7 +2,7 @@ import inspect
 import logging
 import time
 from collections import defaultdict
-from typing import Any, Dict, List, NamedTuple
+from typing import Dict, List, NamedTuple
 
 from ratelimit import limits
 

@@ -1,20 +1,17 @@
+import datetime as dt
 import logging
 from statistics import mean
-import time
-from collections import defaultdict
-from statistics import fmean
-from typing import Any, Dict, List, Tuple
-import datetime as dt
+from typing import Any, List, Tuple
 
 from prometheus_client import Counter, Histogram, Summary
 from visionapi.messages_pb2 import Detection, SaeMessage
 
 from .config import LogLevel, MergingConfig
-from .geo import Coord, distance_m
+from .geo import Coord
 from .mapper import Mapper
 from .mapper import MapperEntry as ME
-from .mapper import MapperError
-from .model import AreaModel, ObservedObject, CameraAreaObservation, Observation
+from .model import (AreaModel, CameraAreaObservation, Observation,
+                    ObservedObject)
 
 logging.basicConfig(format='%(asctime)s %(name)-15s %(levelname)-8s %(processName)-10s %(message)s')
 logger = logging.getLogger(__name__)
