@@ -1,5 +1,6 @@
 import datetime as dt
 import logging
+import time
 from statistics import mean
 from typing import Any, List, Tuple
 
@@ -42,6 +43,7 @@ class GeoMerger:
         self._config = config
         self._area_model = AreaModel(config.max_distance_m)
         self._mapper = Mapper()
+        self._last_output_ts = time.time()
 
     def __call__(self, input_proto) -> Any:
         return self.get(input_proto)
@@ -58,11 +60,16 @@ class GeoMerger:
 
         self._area_model.expire_objects(expiration_age_s=0.5)
 
+        if self._last_output_ts + (1/self._config.target_mps) > time.time():
+            return None
+
         self._update_mappings()
 
         out_msg = self._create_output_message()
 
-        return [(self._config.output_stream_id, self._pack_proto(out_msg))]
+        self._last_output_ts = time.time()
+
+        return self._pack_proto(out_msg)
 
     def _update_mappings(self):
         # 1. Get all objects from model 

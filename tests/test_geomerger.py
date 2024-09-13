@@ -14,7 +14,6 @@ def testee():
     config = MergingConfig(
         input_stream_ids=['geomapper:Monon1stStreetNB', 'geomapper:Monon1stStreetSB'],
         max_distance_m=2,
-        merging_window_ms=1000,
         target_mps=5,
         output_stream_id='output',
     )

@@ -77,7 +77,7 @@ def test_camera_area_model_expiration():
     assert len(testee.get_all_objects(at_time=datetime.fromtimestamp(10))) == 1
 
 def test_area_model():
-    testee = AreaModel()
+    testee = AreaModel(merging_threshold_m=1)
 
     obs = Observation(datetime.fromtimestamp(0), Coord(0,0))
 

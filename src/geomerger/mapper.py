@@ -67,15 +67,15 @@ class Mapper:
         self._secondaries_by_primary[primary].append(secondary)
         self._primary_by_secondary[secondary] = primary
 
-    def _remove_primary(self, primary: MapperEntry) -> None:
+    def _remove_primary(self, primary: MapperEntry, remove_secondaries = False) -> None:
         secondaries = self._secondaries_by_primary.pop(primary, None)
-        if secondaries is not None:
+        if remove_secondaries and secondaries is not None:
             for sec in secondaries:
                 self._primary_by_secondary.pop(sec, None)
 
-    def _remove_secondary(self, secondary: MapperEntry) -> None:
+    def _remove_secondary(self, secondary: MapperEntry, remove_primary = False) -> None:
         primary = self._primary_by_secondary.pop(secondary, None)
-        if primary is not None:
+        if remove_primary and primary is not None:
             self._primary_by_secondary[secondary]
 
     def remap_secondary(self, secondary: MapperEntry, new_primary: MapperEntry) -> None:
@@ -108,7 +108,7 @@ class Mapper:
         if migrate_children:
             children.extend(self._secondaries_by_primary [primary])
 
-        self._remove_primary(primary)
+        self._remove_primary(primary, remove_secondaries=True)
 
         self._add_mapping(new_primary, primary)
         for child in children:
@@ -164,10 +164,16 @@ class ExpiringMapper(Mapper):
             return method(*args, **kwargs)
         return wrapper
     
-    # TODO Check if this is really correct. I'm not sure if we should really just delete the entry if it was a primary and the secondaries are still alive... (probably not)
     def _expire_entries(self):
         expired_entries = [entry for entry, last_seen in self._entries_last_seen.items() if time.time() - last_seen > self._entry_expiration_age_s]
         for entry in expired_entries:
-            self._remove_primary(entry)
-            self._remove_secondary(entry)
+            # TODO The calls to self.x recurse, because the methods are wrapped with this method. We should automatically add _versions of these wrapped methods without the wrapper
+            # if self.is_primary(entry):
+            #     for sec in self.get_secondaries(entry):
+            #         if sec in expired_entries:
+            #             self._remove_secondary(sec)
+            #     if len(self.get_secondaries(entry)) == 0:
+            #         self._remove_primary(entry)
+            # if self.is_secondary(entry):
+            #     self._remove_secondary(entry)
             self._entries_last_seen.pop(entry, None)

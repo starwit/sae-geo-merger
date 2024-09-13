@@ -55,12 +55,15 @@ def run_stage():
 
             if proto_data is None:
                 time.sleep(0.01)
+                continue
 
             if proto_data is not None:
                 FRAME_COUNTER.inc()
 
-            output_records: List[Tuple[str, bytes]] = geo_merger.get(proto_data)
+            output_proto_data = geo_merger.get(proto_data)
 
-            for stream_id, output_proto_data in output_records:
-                with REDIS_PUBLISH_DURATION.time():
-                    publish(f'{CONFIG.redis.output_stream_prefix}:{stream_id}', output_proto_data)
+            if output_proto_data is None:
+                continue
+
+            with REDIS_PUBLISH_DURATION.time():
+                publish(f'{CONFIG.redis.output_stream_prefix}:{CONFIG.merging_config.output_stream_id}', output_proto_data)
