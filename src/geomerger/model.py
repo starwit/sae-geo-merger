@@ -51,12 +51,12 @@ class AreaModel:
         elapsed_time = time.time() - self._last_update_ts
         return self._most_recent_obs_dt + timedelta(seconds=elapsed_time)
     
-    def get_all_observed_objects(self) -> List[ObservedObject]:
-        '''Retrieves all observed objects at current model time by camera id'''
+    def get_all_observed_objects(self) -> List[Tuple[str, ObservedObject]]:
+        '''Retrieves all observed objects at current model with corresponding camera id'''
         current_time = self.current_time()
         objects = []
         for cam in self._cam_models.values():
-            objects += cam.get_all_objects(current_time)
+            objects += [(cam.id, obj) for obj in cam.get_all_objects(current_time)]
         return objects
     
     def find_object_clusters(self, at_time: datetime) -> List[List[ClusterEntry]]:
@@ -132,7 +132,7 @@ class CameraAreaModel:
                 closest_obj_pos = obj_position
         
         if closest_obj is None:
-            return None
+            return None, None
         
         return (ObservedObject(closest_obj.id, Observation(at_time, closest_obj_pos)), distance)
     

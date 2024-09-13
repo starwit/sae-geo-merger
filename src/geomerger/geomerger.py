@@ -1,4 +1,5 @@
 import logging
+from statistics import mean
 import time
 from collections import defaultdict
 from statistics import fmean
@@ -75,13 +76,13 @@ class GeoMerger:
         current_model_time = self._area_model.current_time()
         clusters = self._area_model.find_object_clusters(current_model_time)
 
-        print('\n--- update_mappings ---\n')
-        print(f'ts={current_model_time}')
-        for c in clusters:
-            if len(c) == 2:
-                print(f'{c[1].distance:.2f}', c)
-            else:
-                print(c)
+        # print('\n--- update_mappings ---\n')
+        # print(f'ts={current_model_time}')
+        # for c in clusters:
+        #     if len(c) == 2:
+        #         print(f'{c[1].distance:.2f}', c)
+        #     else:
+        #         print(c)
 
         # 4. Save found mappings into mapper
         # Question: do we even need a mapper now? Yes, we need the mapper for stable primary ids.
@@ -129,17 +130,24 @@ class GeoMerger:
 
         # Iterate over all objects (we do not need to know about the camera by this point anymore)
         # If encountered object is secondary, skip
-        # If encountered object is primary, fetch secondary/ies and calculated position average
+        # If encountered object is primary, fetch secondary/ies and calculate position average
 
-        objects = self._area_model.get_all_observed_objects()
-        for obj in objects:
-            
+        cam_and_objects = self._area_model.get_all_observed_objects()
+        obj_lookup = {ME(c, o.id): o for c, o in cam_and_objects}
+
+        for cam, obj in cam_and_objects:
+            mapper_entry = ME(cam, obj.id)
+            secondaries = []
+            if self._mapper.is_secondary(mapper_entry) and self._mapper.get_primary(mapper_entry) in obj_lookup:
+                continue
+            if self._mapper.is_primary(mapper_entry):
+                secondaries = [obj_lookup[entry] for entry in self._mapper.get_secondaries(mapper_entry) if entry in obj_lookup]
             det = Detection()
             det.class_id = 0
-            det.confidence = 1.0
+            det.confidence = 0
             det.object_id = obj.id
-            det.geo_coordinate.latitude = obj.obs.coord.lat
-            det.geo_coordinate.longitude = obj.obs.coord.lon
+            det.geo_coordinate.latitude = mean([obj.obs.coord.lat] + [s.obs.coord.lat for s in secondaries])
+            det.geo_coordinate.longitude = mean([obj.obs.coord.lon] + [s.obs.coord.lon for s in secondaries])
             sae_msg.detections.append(det)
 
         return sae_msg
