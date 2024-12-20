@@ -72,6 +72,9 @@ class GeoMerger:
         return self._pack_proto(out_msg)
 
     def _update_mappings(self):
+        # Just to improve readability
+        m = self._mapper
+
         # 1. Get all objects from model 
         # objects_by_cam = self._area_model.get_all_observed_objects()
 
@@ -95,34 +98,44 @@ class GeoMerger:
             match1 = ME(c[0].camera_id, c[0].obj.id)
             match2 = ME(c[1].camera_id, c[1].obj.id)
 
-            match (
-                self._mapper.is_primary(match1),
-                self._mapper.is_secondary(match1),
-                self._mapper.is_primary(match2),
-                self._mapper.is_secondary(match2),
-            ):
+            match (m.is_primary(match1), m.is_secondary(match1), m.is_primary(match2), m.is_secondary(match2)):
                 case (False, False, False, False) | (True, False, False, False):
                     # both are new | match1 is already primary and match2 is new
-                    self._mapper.map_secondary(match2, match1)
+                    m.map_secondary(match2, match1)
+                    logger.debug(f'Mapped sec {match2} to prim {match1}')
                 case (False, False, True, False):
-                    # match2 is already primary and match2 is new
-                    self._mapper.map_secondary(match1, match2)
+                    # match2 is already primary and match1 is new
+                    m.map_secondary(match1, match2)
+                    logger.debug(f'Mapped sec {match1} to prim {match2}')
                 case (False, True, False, False):
                     # match1 is secondary and match2 is new
-                    self._mapper.remap_secondary(match1, match2)
+                    prim = m.get_primary(match1)
+                    if prim.source_id != match2.source_id:
+                        m.map_secondary(match2, prim)
+                        logger.debug(f'Added {match2} to prim {prim} through {match1}')
                 case (False, False, False, True):
                     # match2 is secondary and match1 is new
-                    self._mapper.remap_secondary(match2, match1)
+                    prim = m.get_primary(match2)
+                    if prim.source_id != match1.source_id:
+                        m.map_secondary(match1, prim)
+                        logger.debug(f'Added {match1} to prim {prim} through {match2}')
+                case (False, True, False, True):
+                    # both are secondaries, check if same primary (a standard case), if not remap
+                    if m.get_primary(match1) != m.get_primary(match2):
+                        logger.debug(f'{match1} and {match2} both secondary. Ignoring.')
                 case (True, False, False, True):
                     # match1 is primary with match2 secondary (the standard case, then check if mapping is correct)
-                    if not self._mapper.is_secondary_for(match2, match1):
-                        self._mapper.remap_secondary(match2, match1)
+                    if not m.is_secondary_for(match2, match1):
+                        m.remap_secondary(match2, match1)
+                        logger.debug(f'Remapped sec {match2} to prim {match1}')
                 case (False, True, True, False):
                     # match2 is primary with match1 secondary (the standard case, then check if mapping is correct)
-                    if not self._mapper.is_secondary_for(match1, match2):
-                        self._mapper.remap_secondary(match1, match2)
+                    if not m.is_secondary_for(match1, match2):
+                        m.remap_secondary(match1, match2)
+                        logger.debug(f'Remapped sec {match1} to prim {match2}')
                 case state:
-                    logger.error(f'This should not happen! Please debug. State: {state}, match1: {match1}, match2: {match2}')                
+                    logger.error(f'This should not happen! Please debug. State: {state}, match1: {match1}, match2: {match2}')
+                    logger.error(m.dump_mappings())
 
         # 5. Prune pairings from mapper that do not fulfill mapping criteria anymore (distance only at first / no state) -> it is probably okay if mapper expires old mappings automatically
         # TODO Call expiry method here explicitly for readability?
@@ -142,7 +155,7 @@ class GeoMerger:
         for cam, obj in cam_and_objects:
             mapper_entry = ME(cam, obj.id)
             secondaries = []
-            if self._mapper.is_secondary(mapper_entry) and self._mapper.get_primary(mapper_entry) in obj_lookup:
+            if self._mapper.is_secondary(mapper_entry):
                 continue
             if self._mapper.is_primary(mapper_entry):
                 secondaries = [obj_lookup[entry] for entry in self._mapper.get_secondaries(mapper_entry) if entry in obj_lookup]

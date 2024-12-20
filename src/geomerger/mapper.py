@@ -61,8 +61,6 @@ class Mapper:
         
         self._add_mapping(primary, secondary)
 
-        self._log_mappings()
-
     def _add_mapping(self, primary: MapperEntry, secondary: MapperEntry) -> None:
         self._secondaries_by_primary[primary].append(secondary)
         self._primary_by_secondary[secondary] = primary
@@ -94,8 +92,6 @@ class Mapper:
         self._secondaries_by_primary[new_primary].append(secondary)
         self._primary_by_secondary[secondary] = new_primary
 
-        self._log_mappings()
-
     def demote_primary(self, primary: MapperEntry, new_primary: MapperEntry, migrate_children: bool = False) -> None:
         '''Demotes primary, by remapping it to new_primary as a secondary and migrates the children if needed.'''
         if primary.source_id == new_primary.source_id:
@@ -113,8 +109,6 @@ class Mapper:
         self._add_mapping(new_primary, primary)
         for child in children:
             self._add_mapping(new_primary, child)
-
-        self._log_mappings()
 
     def get_primary(self, secondary: MapperEntry) -> MapperEntry:
         if not self.is_secondary(secondary):
@@ -138,8 +132,8 @@ class Mapper:
     def is_known(self, entry: MapperEntry) -> bool:
         return self.is_primary(entry) or self.is_secondary(entry)
     
-    def _log_mappings(self) -> None:
-        logger.warning(dict_to_text(self._secondaries_by_primary))
+    def dump_mappings(self) -> str:
+        return dict_to_text(self._secondaries_by_primary)
     
 
 class ExpiringMapper(Mapper):
@@ -160,7 +154,7 @@ class ExpiringMapper(Mapper):
             for arg in [*args, *kwargs.values()]:
                 if isinstance(arg, MapperEntry):
                     self._entries_last_seen[arg] = time.time()
-            self._expire_entries_limited()
+            # self._expire_entries_limited()
             return method(*args, **kwargs)
         return wrapper
     
